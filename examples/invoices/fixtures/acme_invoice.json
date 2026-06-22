@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "acme_invoice",
+  "source_ref": "samples/acme.txt",
+  "source_inline": null,
+  "expected": {
+    "vendor": "Acme Corporation",
+    "invoice_number": "INV-1001",
+    "invoice_date": "2024-03-15T09:00:00",
+    "total": 1250.0,
+    "line_items": [
+      { "description": "Widget", "amount": 1000.0 },
+      { "description": "Shipping", "amount": 250.0 }
+    ]
+  },
+  "recorded_with": {
+    "model": "fake-extractor",
+    "prompt_version": "v1",
+    "schema_hash": null
+  }
+}

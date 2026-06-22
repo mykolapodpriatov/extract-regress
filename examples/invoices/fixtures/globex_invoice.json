@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "name": "globex_invoice",
+  "source_ref": "samples/globex.txt",
+  "source_inline": null,
+  "expected": {
+    "vendor": "Globex Inc",
+    "invoice_number": "GBX-77",
+    "invoice_date": "2024-04-01",
+    "total": 500.0,
+    "line_items": [
+      { "description": "Subscription", "amount": 500.0 }
+    ]
+  },
+  "recorded_with": {
+    "model": "fake-extractor",
+    "prompt_version": "v1",
+    "schema_hash": null
+  }
+}

@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install (with dev + provider extras)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,openai,anthropic]"
+
+      - name: Ruff lint
+        run: ruff check
+
+      - name: Ruff format check
+        run: ruff format --check
+
+      - name: Mypy (strict)
+        run: mypy src
+
+      - name: Pytest with coverage
+        run: |
+          coverage run --source=extract_regress -m pytest -q
+          coverage report -m
+
+      - name: Run the offline example
+        working-directory: examples/invoices
+        run: extract-regress run --project-dir .
