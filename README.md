@@ -74,7 +74,7 @@ A fixture is one JSON file per case under `fixtures_dir`:
 {
   "version": 1,
   "name": "invoice_basic",
-  "source_ref": "../samples/invoice_basic.txt",
+  "source_ref": "samples/invoice_basic.txt",
   "source_inline": null,
   "expected": { "vendor": "Acme Corporation", "total": 1250.0 }
 }
