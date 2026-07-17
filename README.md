@@ -139,6 +139,22 @@ extract-regress run --project-dir .   # the same check via the CLI
 
 See [`examples/invoices/README.md`](examples/invoices/README.md) for details.
 
+## GitHub Action
+
+A composite action ships in the package
+([`src/extract_regress/action/action.yml`](src/extract_regress/action/action.yml)).
+It runs `extract-regress run`, fails the build on a regression, coverage drop, or
+budget breach, and — when a token is available — posts the field-level diff as a
+collapsible PR comment. Without a token the diff is written to the job log and the
+comment is skipped, so it is safe on forks.
+
+```yaml
+- uses: mykolapodpriatov/extract-regress@main
+  with:
+    project-dir: examples/invoices
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
 ## How it works
 
 You wrap your extraction function once; the plugin snapshots outputs into
@@ -163,7 +179,7 @@ implemented and tested.
 - [x] Core record/replay engine + type-aware field diff
 - [x] pytest plugin + CLI with cost/latency budgets
 - [x] Optional cached LLM-judge for free-text fields
-- [ ] GitHub Action that renders the field-level diff as a PR comment
+- [x] GitHub Action that renders the field-level diff as a PR comment
 
 ## License
 

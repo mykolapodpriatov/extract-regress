@@ -14,6 +14,7 @@ from .types import FieldDiff, RunReport
 __all__ = [
     "render_json",
     "render_markdown",
+    "render_pr_comment",
     "render_terminal",
     "summary_line",
 ]
@@ -210,3 +211,61 @@ def render_json(report: RunReport) -> str:
         },
     }
     return json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False, default=str)
+
+
+def render_pr_comment(report: RunReport) -> str:
+    """Render a compact, collapsible Markdown summary for a PR comment.
+
+    Leads with a pass/fail line and the one-line summary, then a collapsed
+    ``<details>`` table listing only the *failing* field diffs, followed by
+    coverage-drop and budget sections. A passing run renders the short PASS
+    form with no diff table, keeping green PRs quiet.
+    """
+    status = "PASS" if report.passed else "FAIL"
+    emoji = "✅" if report.passed else "❌"
+    lines: list[str] = [f"### extract-regress: {emoji} {status}", "", summary_line(report), ""]
+
+    failing: list[tuple[str, FieldDiff]] = [
+        (r.fixture_name, d) for r in report.results for d in r.failing_diffs
+    ]
+    if failing:
+        lines.append("<details><summary>Failing field diffs</summary>")
+        lines.append("")
+        lines.append("| Fixture | Path | Kind | Golden | Actual | Reason |")
+        lines.append("| --- | --- | --- | --- | --- | --- |")
+        for fixture_name, diff in failing:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        fixture_name,
+                        f"`{diff.path}`",
+                        diff.kind,
+                        _md_cell(diff.golden),
+                        _md_cell(diff.actual),
+                        diff.reason,
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+        lines.append("</details>")
+        lines.append("")
+
+    if report.dropped_coverage:
+        lines.append("**Coverage drops**")
+        lines.append("")
+        for delta in report.dropped_coverage:
+            lines.append(
+                f"- `{delta.path}`: {delta.baseline_fill_rate:.2f} -> {delta.current_fill_rate:.2f}"
+            )
+        lines.append("")
+
+    if report.budget.checked:
+        lines.append("**Budget**")
+        lines.append("")
+        for message in report.budget.messages:
+            lines.append(f"- {message}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
