@@ -103,9 +103,9 @@ beyond the coverage threshold, or a cost/latency budget is exceeded.
 | Command | What it does |
 | --- | --- |
 | `extract-regress record` | Build goldens for fixtures lacking them; refresh the coverage snapshot. |
-| `extract-regress run` | Replay + check; exit non-zero on regression or budget breach. |
+| `extract-regress run --format term\|md\|json` | Replay + check; exit non-zero on regression or budget breach. |
 | `extract-regress update` | Accept current outputs as the new goldens; refresh the snapshot. |
-| `extract-regress report --format md\|term` | Render the last run. |
+| `extract-regress report --format term\|md\|json` | Render the last run. |
 
 ## Configuration
 

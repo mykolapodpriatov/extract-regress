@@ -112,6 +112,48 @@ def test_run_markdown_format(tmp_path: Path) -> None:
     assert "## extract-regress" in run.output
 
 
+def test_run_json_format_parses(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    run = runner.invoke(app, ["run", "--project-dir", str(project), "--format", "json"])
+    assert run.exit_code == 0, run.output
+    payload = json.loads(run.output)
+    assert payload["status"] == "PASS"
+
+
+def test_run_json_format_still_exits_one_on_regression(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, DRIFT_CONFTEST, with_goldens=True)
+    run = runner.invoke(app, ["run", "--project-dir", str(project), "--format", "json"])
+    assert run.exit_code == 1, run.output
+    payload = json.loads(run.output)
+    assert payload["status"] == "FAIL"
+
+
+def test_run_rejects_unknown_format(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    run = runner.invoke(app, ["run", "--project-dir", str(project), "--format", "bogus"])
+    assert run.exit_code == 2, run.output
+    assert "unknown --format" in run.output
+
+
+def test_report_json_format(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    rep = runner.invoke(app, ["report", "--project-dir", str(project), "--format", "json"])
+    assert rep.exit_code == 0, rep.output
+    # ``report`` renders the last run (which may be an in-memory one from a
+    # prior invocation in this process), so assert the stable JSON shape rather
+    # than a specific pass/fail verdict.
+    payload = json.loads(rep.output)
+    assert payload["status"] in {"PASS", "FAIL"}
+    assert "fixtures" in payload and "budget" in payload
+
+
+def test_report_rejects_unknown_format(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    rep = runner.invoke(app, ["report", "--project-dir", str(project), "--format", "bogus"])
+    assert rep.exit_code == 2, rep.output
+    assert "unknown --format" in rep.output
+
+
 def test_update_overwrites_goldens(tmp_path: Path) -> None:
     project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
     # Corrupt a golden, then update from current (correct) outputs.

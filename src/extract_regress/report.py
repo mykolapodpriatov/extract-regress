@@ -1,15 +1,22 @@
-"""Terminal (rich) and Markdown renderers for a :class:`RunReport`."""
+"""Terminal (rich), Markdown, JSON, and PR-comment renderers for a :class:`RunReport`."""
 
 from __future__ import annotations
 
+import json
 from io import StringIO
+from typing import Any
 
 from rich.console import Console
 from rich.table import Table
 
 from .types import FieldDiff, RunReport
 
-__all__ = ["render_markdown", "render_terminal", "summary_line"]
+__all__ = [
+    "render_json",
+    "render_markdown",
+    "render_terminal",
+    "summary_line",
+]
 
 
 def _truncate(value: object, limit: int = 60) -> str:
@@ -142,3 +149,64 @@ def render_markdown(report: RunReport) -> str:
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _diff_payload(diff: FieldDiff) -> dict[str, Any]:
+    """Serialize a single field diff to a stable, JSON-friendly mapping."""
+    return {
+        "path": diff.path,
+        "kind": diff.kind,
+        "golden": diff.golden,
+        "actual": diff.actual,
+        "tolerated": diff.tolerated,
+        "reason": diff.reason,
+    }
+
+
+def render_json(report: RunReport) -> str:
+    """Render the report as a machine-readable JSON document.
+
+    The schema is stable and sorted: a top-level ``status`` plus ``summary``
+    counts, a ``fixtures`` array carrying every per-fixture diff (with
+    ``path``/``kind``/``golden``/``actual``/``tolerated``/``reason``), the
+    flagged ``coverage_drops``, and the ``budget`` outcome. ``default=str``
+    guards against any non-JSON-native golden/actual value so serialization
+    never raises.
+    """
+    payload: dict[str, Any] = {
+        "status": "PASS" if report.passed else "FAIL",
+        "summary": {
+            "fixtures": len(report.results),
+            "failing_diffs": sum(len(r.failing_diffs) for r in report.results),
+            "coverage_drops": len(report.dropped_coverage),
+            "budget_checked": report.budget.checked,
+            "budget_passed": report.budget.passed,
+        },
+        "fixtures": [
+            {
+                "fixture": result.fixture_name,
+                "error": result.error,
+                "passed": result.passed,
+                "diffs": [_diff_payload(d) for d in result.diffs],
+            }
+            for result in report.results
+        ],
+        "coverage_drops": [
+            {
+                "path": delta.path,
+                "baseline_fill_rate": delta.baseline_fill_rate,
+                "current_fill_rate": delta.current_fill_rate,
+            }
+            for delta in report.dropped_coverage
+        ],
+        "budget": {
+            "checked": report.budget.checked,
+            "passed": report.budget.passed,
+            "total_cost_usd": report.budget.total_cost_usd,
+            "p95_latency_ms": report.budget.p95_latency_ms,
+            "max_cost_usd": report.budget.max_cost_usd,
+            "max_p95_latency_ms": report.budget.max_p95_latency_ms,
+            "messages": list(report.budget.messages),
+        },
+    }
+    return json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False, default=str)

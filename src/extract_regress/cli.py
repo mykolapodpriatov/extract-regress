@@ -25,9 +25,12 @@ from typing import Annotated
 import typer
 
 from .config import ERConfig, load_project_config
-from .report import render_markdown, render_terminal
+from .report import render_json, render_markdown, render_terminal
 from .runner import Runner
 from .types import RunReport
+
+#: The output formats accepted by ``--format`` on ``run`` and ``report``.
+VALID_FORMATS = ("term", "md", "json")
 
 app = typer.Typer(
     name="extract-regress",
@@ -131,6 +134,30 @@ def _warn_skipped(skipped: tuple[str, ...]) -> None:
         )
 
 
+def _check_format(report_format: str) -> None:
+    """Reject an unknown ``--format`` value with a clear error (exit code 2).
+
+    Without this, an unrecognized value (a typo, or an unsupported format such
+    as an old ``--format json`` before it existed) would silently fall through
+    to the terminal renderer and exit ``0`` — masking the mistake.
+    """
+    if report_format not in VALID_FORMATS:
+        typer.echo(
+            f"unknown --format {report_format!r}; expected {'|'.join(VALID_FORMATS)}",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+
+def _render(report: RunReport, report_format: str) -> str:
+    """Render ``report`` in the requested (already-validated) format."""
+    if report_format == "md":
+        return render_markdown(report)
+    if report_format == "json":
+        return render_json(report)
+    return render_terminal(report, color=False)
+
+
 _LAST_REPORT: RunReport | None = None
 
 
@@ -186,19 +213,17 @@ def run(
     fixtures_dir: FixturesDirOpt = None,
     budget: Annotated[bool, typer.Option(help="Enforce cost/latency budgets.")] = True,
     report_format: Annotated[
-        str, typer.Option("--format", help="Output format: term or md.")
+        str, typer.Option("--format", help="Output format: term, md, or json.")
     ] = "term",
 ) -> None:
     """Replay fixtures and check; exit non-zero on regression or budget breach."""
     global _LAST_REPORT
+    _check_format(report_format)
     config = _resolve_config(config_module, fixtures_dir, project_dir.resolve())
     report = Runner(config).run(check_budget=budget)
     _LAST_REPORT = report
 
-    if report_format == "md":
-        typer.echo(render_markdown(report))
-    else:
-        typer.echo(render_terminal(report, color=False))
+    typer.echo(_render(report, report_format))
 
     raise typer.Exit(code=0 if report.passed else 1)
 
@@ -209,7 +234,7 @@ def report(
     project_dir: ProjectDirOpt = Path(),
     fixtures_dir: FixturesDirOpt = None,
     report_format: Annotated[
-        str, typer.Option("--format", help="Output format: term or md.")
+        str, typer.Option("--format", help="Output format: term, md, or json.")
     ] = "term",
 ) -> None:
     """Render the most recent run.
@@ -217,12 +242,10 @@ def report(
     For a fresh process with no in-memory run, this performs a read-only replay
     and renders it without changing the exit code semantics of ``run``.
     """
+    _check_format(report_format)
     config = _resolve_config(config_module, fixtures_dir, project_dir.resolve())
     current = _LAST_REPORT if _LAST_REPORT is not None else Runner(config).run()
-    if report_format == "md":
-        typer.echo(render_markdown(current))
-    else:
-        typer.echo(render_terminal(current, color=False))
+    typer.echo(_render(current, report_format))
 
 
 if __name__ == "__main__":  # pragma: no cover
