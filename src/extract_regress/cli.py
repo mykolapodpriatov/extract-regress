@@ -217,6 +217,10 @@ def run(
     report_format: Annotated[
         str, typer.Option("--format", help="Output format: term, md, or json.")
     ] = "term",
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Also write the rendered report to this path."),
+    ] = None,
 ) -> None:
     """Replay fixtures and check; exit non-zero on regression or budget breach."""
     global _LAST_REPORT
@@ -225,7 +229,14 @@ def run(
     report = Runner(config).run(check_budget=budget)
     _LAST_REPORT = report
 
-    typer.echo(_render(report, report_format))
+    rendered = _render(report, report_format)
+    typer.echo(rendered)
+    if out is not None:
+        # Persist the exact rendered output as a CI artifact, in addition to the
+        # stdout echo. ``_render`` already uses ``color=False`` for term, so the
+        # file never carries ANSI escapes.
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(rendered, encoding="utf-8")
 
     raise typer.Exit(code=0 if report.passed else 1)
 

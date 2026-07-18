@@ -8,6 +8,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from extract_regress import cli
 from extract_regress.cli import _import_module, app
 
 runner = CliRunner()
@@ -341,6 +342,47 @@ def test_coverage_rejects_unknown_format(tmp_path: Path) -> None:
     result = runner.invoke(app, ["coverage", "--project-dir", str(project), "--format", "bogus"])
     assert result.exit_code == 2, result.output
     assert "unknown --format" in result.output
+
+
+# ---------------------------------------------------------------------------
+# run --out (#8)
+# ---------------------------------------------------------------------------
+
+
+def test_run_out_writes_markdown_artifact(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    # The parent directory does not exist yet: --out must create it.
+    out_path = project / "artifacts" / "report.md"
+    result = runner.invoke(
+        app,
+        ["run", "--project-dir", str(project), "--format", "md", "--out", str(out_path)],
+    )
+    assert result.exit_code == 0, result.output
+    assert out_path.read_text(encoding="utf-8") == cli._render(cli._LAST_REPORT, "md")
+
+
+def test_run_out_writes_json_artifact(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    out_path = project / "artifacts" / "report.json"
+    result = runner.invoke(
+        app,
+        ["run", "--project-dir", str(project), "--format", "json", "--out", str(out_path)],
+    )
+    assert result.exit_code == 0, result.output
+    assert out_path.read_text(encoding="utf-8") == cli._render(cli._LAST_REPORT, "json")
+
+
+def test_run_out_preserves_failure_exit_code(tmp_path: Path) -> None:
+    # --out must not change pass/fail semantics: a regression still exits 1 while
+    # the artifact is still written.
+    project = _setup_project(tmp_path, DRIFT_CONFTEST, with_goldens=True)
+    out_path = project / "report.json"
+    result = runner.invoke(
+        app,
+        ["run", "--project-dir", str(project), "--format", "json", "--out", str(out_path)],
+    )
+    assert result.exit_code == 1, result.output
+    assert out_path.read_text(encoding="utf-8") == cli._render(cli._LAST_REPORT, "json")
 
 
 def test_import_module_uses_unique_name_and_cleans_syspath(tmp_path: Path) -> None:
