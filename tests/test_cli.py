@@ -297,6 +297,52 @@ def test_validate_bad_json_exits_two(tmp_path: Path) -> None:
     assert "invalid JSON" in result.output
 
 
+# ---------------------------------------------------------------------------
+# coverage (#7)
+# ---------------------------------------------------------------------------
+
+
+def test_coverage_command_term(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    result = runner.invoke(app, ["coverage", "--project-dir", str(project)])
+    assert result.exit_code == 0, result.output
+    assert "coverage" in result.output
+    assert "total" in result.output
+
+
+def test_coverage_command_flags_drop_in_json(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    # A baseline field that the recorded goldens no longer fill drops to 0.
+    (project / "fixtures" / "coverage_baseline.json").write_text(
+        json.dumps({"total": 1.0, "vendor": 1.0, "tax_id": 1.0}), encoding="utf-8"
+    )
+    result = runner.invoke(app, ["coverage", "--project-dir", str(project), "--format", "json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    entries = {e["path"]: e for e in payload["coverage"]}
+    assert entries["tax_id"]["dropped"] is True
+    assert entries["total"]["dropped"] is False
+    assert payload["drops"] == 1
+
+    # Read-only: the baseline snapshot on disk is untouched.
+    baseline = json.loads((project / "fixtures" / "coverage_baseline.json").read_text())
+    assert baseline == {"total": 1.0, "vendor": 1.0, "tax_id": 1.0}
+
+
+def test_coverage_command_markdown(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    result = runner.invoke(app, ["coverage", "--project-dir", str(project), "--format", "md"])
+    assert result.exit_code == 0, result.output
+    assert "## extract-regress coverage" in result.output
+
+
+def test_coverage_rejects_unknown_format(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    result = runner.invoke(app, ["coverage", "--project-dir", str(project), "--format", "bogus"])
+    assert result.exit_code == 2, result.output
+    assert "unknown --format" in result.output
+
+
 def test_import_module_uses_unique_name_and_cleans_syspath(tmp_path: Path) -> None:
     # Two different projects each have a ``conftest.py`` defining MARK; importing
     # both must not clobber a shared ``sys.modules['conftest']`` key, and the

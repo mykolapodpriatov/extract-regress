@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from io import StringIO
 from typing import Any
 
 from rich.console import Console
 from rich.table import Table
 
-from .types import FieldDiff, RunReport
+from .types import CoverageDelta, FieldDiff, RunReport
 
 __all__ = [
+    "render_coverage",
     "render_json",
     "render_markdown",
     "render_pr_comment",
@@ -211,6 +213,81 @@ def render_json(report: RunReport) -> str:
         },
     }
     return json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False, default=str)
+
+
+def _coverage_terminal(deltas: Sequence[CoverageDelta]) -> str:
+    buffer = StringIO()
+    console = Console(file=buffer, force_terminal=False, width=120, color_system=None)
+
+    table = Table(title="extract-regress coverage", show_lines=False)
+    for column in ("field", "baseline", "current", "status"):
+        table.add_column(column, overflow="fold")
+    for delta in deltas:
+        status = "[red]drop[/]" if delta.dropped else "[green]ok[/]"
+        table.add_row(
+            delta.path,
+            f"{delta.baseline_fill_rate:.2f}",
+            f"{delta.current_fill_rate:.2f}",
+            status,
+        )
+    console.print(table)
+
+    dropped = sum(1 for delta in deltas if delta.dropped)
+    console.print(f"{len(deltas)} field(s) | {dropped} drop(s)")
+    return buffer.getvalue()
+
+
+def _coverage_markdown(deltas: Sequence[CoverageDelta]) -> str:
+    dropped = sum(1 for delta in deltas if delta.dropped)
+    lines: list[str] = [
+        "## extract-regress coverage",
+        "",
+        f"{len(deltas)} field(s), {dropped} drop(s)",
+        "",
+    ]
+    if deltas:
+        lines.append("| Field | Baseline | Current | Status |")
+        lines.append("| --- | --- | --- | --- |")
+        for delta in deltas:
+            status = "**drop**" if delta.dropped else "ok"
+            lines.append(
+                f"| `{delta.path}` | {delta.baseline_fill_rate:.2f} | "
+                f"{delta.current_fill_rate:.2f} | {status} |"
+            )
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _coverage_json(deltas: Sequence[CoverageDelta]) -> str:
+    payload: dict[str, Any] = {
+        "fields": len(deltas),
+        "drops": sum(1 for delta in deltas if delta.dropped),
+        "coverage": [
+            {
+                "path": delta.path,
+                "baseline_fill_rate": delta.baseline_fill_rate,
+                "current_fill_rate": delta.current_fill_rate,
+                "dropped": delta.dropped,
+            }
+            for delta in deltas
+        ],
+    }
+    return json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False, default=str)
+
+
+def render_coverage(deltas: Sequence[CoverageDelta], report_format: str = "term") -> str:
+    """Render per-field coverage deltas in term, Markdown, or JSON form.
+
+    A read-only view of fill-rate drift versus the committed baseline: each row
+    is one field path with its baseline and current fill-rate and whether the
+    field dropped beyond the configured threshold. Reuses :class:`CoverageDelta`
+    and writes nothing to disk.
+    """
+    if report_format == "md":
+        return _coverage_markdown(deltas)
+    if report_format == "json":
+        return _coverage_json(deltas)
+    return _coverage_terminal(deltas)
 
 
 def render_pr_comment(report: RunReport) -> str:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from extract_regress.coverage import (
@@ -11,6 +12,8 @@ from extract_regress.coverage import (
     present_fields,
     write_baseline,
 )
+from extract_regress.report import render_coverage
+from extract_regress.types import CoverageDelta
 
 
 def test_present_fields_ignores_nulls() -> None:
@@ -116,3 +119,48 @@ def test_baseline_is_written_sorted(fixtures_dir: Path) -> None:
     write_baseline(fixtures_dir, {"z": 1.0, "a": 0.5})
     text = (fixtures_dir / "coverage_baseline.json").read_text(encoding="utf-8")
     assert text.index('"a"') < text.index('"z"')
+
+
+# ---------------------------------------------------------------------------
+# render_coverage (#7)
+# ---------------------------------------------------------------------------
+
+
+def _coverage_deltas() -> list[CoverageDelta]:
+    return [
+        CoverageDelta(path="total", baseline_fill_rate=1.0, current_fill_rate=1.0, dropped=False),
+        CoverageDelta(path="tax_id", baseline_fill_rate=1.0, current_fill_rate=0.4, dropped=True),
+    ]
+
+
+def test_render_coverage_term_is_default() -> None:
+    out = render_coverage(_coverage_deltas())
+    assert "extract-regress coverage" in out
+    assert "tax_id" in out
+    assert "drop" in out
+    assert "2 field(s)" in out
+    assert "1 drop(s)" in out
+
+
+def test_render_coverage_markdown() -> None:
+    md = render_coverage(_coverage_deltas(), "md")
+    assert md.startswith("## extract-regress coverage")
+    assert "| Field | Baseline | Current | Status |" in md
+    assert "`tax_id`" in md
+    assert "**drop**" in md
+
+
+def test_render_coverage_json() -> None:
+    payload = json.loads(render_coverage(_coverage_deltas(), "json"))
+    assert payload["fields"] == 2
+    assert payload["drops"] == 1
+    entries = {e["path"]: e for e in payload["coverage"]}
+    assert entries["tax_id"]["dropped"] is True
+    assert entries["tax_id"]["baseline_fill_rate"] == 1.0
+    assert entries["total"]["dropped"] is False
+
+
+def test_render_coverage_empty() -> None:
+    out = render_coverage([])
+    assert "0 field(s)" in out
+    assert "0 drop(s)" in out

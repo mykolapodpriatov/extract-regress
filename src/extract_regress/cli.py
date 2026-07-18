@@ -25,8 +25,9 @@ from typing import Annotated
 import typer
 
 from .config import ERConfig, load_project_config
+from .coverage import compute_fill_rates, diff_coverage, load_baseline
 from .fixtures import FixtureError, FixtureStore
-from .report import render_json, render_markdown, render_terminal
+from .report import render_coverage, render_json, render_markdown, render_terminal
 from .runner import Runner
 from .types import RunReport
 
@@ -288,6 +289,37 @@ def validate(
     if valid:
         typer.echo(f"all {len(fixtures)} fixture(s) valid")
     raise typer.Exit(code=0 if valid else 2)
+
+
+@app.command()
+def coverage(
+    config_module: ConfigModuleOpt = "conftest.py",
+    project_dir: ProjectDirOpt = Path(),
+    fixtures_dir: FixturesDirOpt = None,
+    report_format: Annotated[
+        str, typer.Option("--format", help="Output format: term, md, or json.")
+    ] = "term",
+) -> None:
+    """Inspect per-field fill-rates against the committed coverage baseline.
+
+    Recomputes fill-rates over the recorded goldens and diffs them against
+    ``coverage_baseline.json``, printing each field's baseline/current rate and
+    flagging drops beyond the configured threshold. Read-only: writes no goldens
+    or baseline and makes no extraction call.
+    """
+    _check_format(report_format)
+    config = _resolve_config(config_module, fixtures_dir, project_dir.resolve())
+    store = FixtureStore(config.fixtures_dir)
+
+    goldens = [fixture.expected for fixture in store.load_all()]
+    current = compute_fill_rates(goldens)
+    baseline = load_baseline(config.fixtures_dir)
+    deltas = diff_coverage(
+        baseline,
+        current,
+        drop_threshold=config.coverage_drop_threshold,
+    )
+    typer.echo(render_coverage(deltas, report_format))
 
 
 if __name__ == "__main__":  # pragma: no cover
