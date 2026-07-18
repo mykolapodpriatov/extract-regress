@@ -246,6 +246,57 @@ def test_record_skips_errored_fixture_and_warns(tmp_path: Path) -> None:
     assert baseline == {}
 
 
+def _write_fixture(fixtures: Path, name: str, payload: dict[str, object]) -> None:
+    (fixtures / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# validate (#6)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_ok_exits_zero(tmp_path: Path) -> None:
+    # A directory of well-formed inline fixtures validates with no extraction.
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
+    result = runner.invoke(app, ["validate", "--project-dir", str(project)])
+    assert result.exit_code == 0, result.output
+    assert "invoice_a: OK" in result.output
+    assert "invoice_b: OK" in result.output
+    assert "all 2 fixture(s) valid" in result.output
+
+
+def test_validate_dual_source_exits_two(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
+    _write_fixture(
+        project / "fixtures",
+        "dual",
+        {"version": 1, "name": "dual", "source_ref": "a.txt", "source_inline": "x"},
+    )
+    result = runner.invoke(app, ["validate", "--project-dir", str(project)])
+    assert result.exit_code == 2, result.output
+    assert "exactly one of" in result.output
+
+
+def test_validate_escaping_ref_exits_two(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
+    _write_fixture(
+        project / "fixtures",
+        "evil",
+        {"version": 1, "name": "evil", "source_ref": "../secret.txt"},
+    )
+    result = runner.invoke(app, ["validate", "--project-dir", str(project)])
+    assert result.exit_code == 2, result.output
+    assert "escapes the fixture directory" in result.output
+
+
+def test_validate_bad_json_exits_two(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
+    (project / "fixtures" / "broken.json").write_text("{ not json", encoding="utf-8")
+    result = runner.invoke(app, ["validate", "--project-dir", str(project)])
+    assert result.exit_code == 2, result.output
+    assert "invalid JSON" in result.output
+
+
 def test_import_module_uses_unique_name_and_cleans_syspath(tmp_path: Path) -> None:
     # Two different projects each have a ``conftest.py`` defining MARK; importing
     # both must not clobber a shared ``sys.modules['conftest']`` key, and the
