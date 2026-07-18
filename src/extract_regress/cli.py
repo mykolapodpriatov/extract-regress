@@ -25,7 +25,9 @@ from typing import Annotated
 import typer
 
 from .config import ERConfig, load_project_config
-from .report import render_json, render_markdown, render_terminal
+from .coverage import compute_fill_rates, diff_coverage, load_baseline
+from .fixtures import FixtureError, FixtureStore
+from .report import render_coverage, render_json, render_markdown, render_terminal
 from .runner import Runner
 from .types import RunReport
 
@@ -215,6 +217,10 @@ def run(
     report_format: Annotated[
         str, typer.Option("--format", help="Output format: term, md, or json.")
     ] = "term",
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Also write the rendered report to this path."),
+    ] = None,
 ) -> None:
     """Replay fixtures and check; exit non-zero on regression or budget breach."""
     global _LAST_REPORT
@@ -223,7 +229,14 @@ def run(
     report = Runner(config).run(check_budget=budget)
     _LAST_REPORT = report
 
-    typer.echo(_render(report, report_format))
+    rendered = _render(report, report_format)
+    typer.echo(rendered)
+    if out is not None:
+        # Persist the exact rendered output as a CI artifact, in addition to the
+        # stdout echo. ``_render`` already uses ``color=False`` for term, so the
+        # file never carries ANSI escapes.
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(rendered, encoding="utf-8")
 
     raise typer.Exit(code=0 if report.passed else 1)
 
@@ -246,6 +259,78 @@ def report(
     config = _resolve_config(config_module, fixtures_dir, project_dir.resolve())
     current = _LAST_REPORT if _LAST_REPORT is not None else Runner(config).run()
     typer.echo(_render(current, report_format))
+
+
+@app.command()
+def validate(
+    config_module: ConfigModuleOpt = "conftest.py",
+    project_dir: ProjectDirOpt = Path(),
+    fixtures_dir: FixturesDirOpt = None,
+) -> None:
+    """Lint every fixture offline without running the extractor.
+
+    Loads and validates each fixture (schema, mutually-exclusive
+    ``source_ref``/``source_inline``, on-disk version) and resolves every
+    ``source_ref`` to confirm it stays inside the fixture directory. Runs no
+    extraction and makes no LLM call. Prints a per-fixture ``OK``/error line and
+    exits 0 when all fixtures are valid, else 2.
+    """
+    config = _resolve_config(config_module, fixtures_dir, project_dir.resolve())
+    store = FixtureStore(config.fixtures_dir)
+
+    # A malformed fixture (bad JSON, dual/neither source, version mismatch) is
+    # rejected by ``load_all`` before any per-fixture check can run; report the
+    # aggregate error (its message names the offending file) and fail.
+    try:
+        fixtures = store.load_all()
+    except FixtureError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+    valid = True
+    for fixture in fixtures:
+        try:
+            fixture.resolve_source()
+        except FixtureError as exc:
+            typer.echo(f"{fixture.name}: error: {exc}", err=True)
+            valid = False
+        else:
+            typer.echo(f"{fixture.name}: OK")
+
+    if valid:
+        typer.echo(f"all {len(fixtures)} fixture(s) valid")
+    raise typer.Exit(code=0 if valid else 2)
+
+
+@app.command()
+def coverage(
+    config_module: ConfigModuleOpt = "conftest.py",
+    project_dir: ProjectDirOpt = Path(),
+    fixtures_dir: FixturesDirOpt = None,
+    report_format: Annotated[
+        str, typer.Option("--format", help="Output format: term, md, or json.")
+    ] = "term",
+) -> None:
+    """Inspect per-field fill-rates against the committed coverage baseline.
+
+    Recomputes fill-rates over the recorded goldens and diffs them against
+    ``coverage_baseline.json``, printing each field's baseline/current rate and
+    flagging drops beyond the configured threshold. Read-only: writes no goldens
+    or baseline and makes no extraction call.
+    """
+    _check_format(report_format)
+    config = _resolve_config(config_module, fixtures_dir, project_dir.resolve())
+    store = FixtureStore(config.fixtures_dir)
+
+    goldens = [fixture.expected for fixture in store.load_all()]
+    current = compute_fill_rates(goldens)
+    baseline = load_baseline(config.fixtures_dir)
+    deltas = diff_coverage(
+        baseline,
+        current,
+        drop_threshold=config.coverage_drop_threshold,
+    )
+    typer.echo(render_coverage(deltas, report_format))
 
 
 if __name__ == "__main__":  # pragma: no cover

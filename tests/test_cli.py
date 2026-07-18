@@ -8,6 +8,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from extract_regress import cli
 from extract_regress.cli import _import_module, app
 
 runner = CliRunner()
@@ -244,6 +245,144 @@ def test_record_skips_errored_fixture_and_warns(tmp_path: Path) -> None:
     # No coverage snapshot field was populated from an errored {} sample.
     baseline = json.loads((project / "fixtures" / "coverage_baseline.json").read_text())
     assert baseline == {}
+
+
+def _write_fixture(fixtures: Path, name: str, payload: dict[str, object]) -> None:
+    (fixtures / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# validate (#6)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_ok_exits_zero(tmp_path: Path) -> None:
+    # A directory of well-formed inline fixtures validates with no extraction.
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
+    result = runner.invoke(app, ["validate", "--project-dir", str(project)])
+    assert result.exit_code == 0, result.output
+    assert "invoice_a: OK" in result.output
+    assert "invoice_b: OK" in result.output
+    assert "all 2 fixture(s) valid" in result.output
+
+
+def test_validate_dual_source_exits_two(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
+    _write_fixture(
+        project / "fixtures",
+        "dual",
+        {"version": 1, "name": "dual", "source_ref": "a.txt", "source_inline": "x"},
+    )
+    result = runner.invoke(app, ["validate", "--project-dir", str(project)])
+    assert result.exit_code == 2, result.output
+    assert "exactly one of" in result.output
+
+
+def test_validate_escaping_ref_exits_two(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
+    _write_fixture(
+        project / "fixtures",
+        "evil",
+        {"version": 1, "name": "evil", "source_ref": "../secret.txt"},
+    )
+    result = runner.invoke(app, ["validate", "--project-dir", str(project)])
+    assert result.exit_code == 2, result.output
+    assert "escapes the fixture directory" in result.output
+
+
+def test_validate_bad_json_exits_two(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
+    (project / "fixtures" / "broken.json").write_text("{ not json", encoding="utf-8")
+    result = runner.invoke(app, ["validate", "--project-dir", str(project)])
+    assert result.exit_code == 2, result.output
+    assert "invalid JSON" in result.output
+
+
+# ---------------------------------------------------------------------------
+# coverage (#7)
+# ---------------------------------------------------------------------------
+
+
+def test_coverage_command_term(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    result = runner.invoke(app, ["coverage", "--project-dir", str(project)])
+    assert result.exit_code == 0, result.output
+    assert "coverage" in result.output
+    assert "total" in result.output
+
+
+def test_coverage_command_flags_drop_in_json(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    # A baseline field that the recorded goldens no longer fill drops to 0.
+    (project / "fixtures" / "coverage_baseline.json").write_text(
+        json.dumps({"total": 1.0, "vendor": 1.0, "tax_id": 1.0}), encoding="utf-8"
+    )
+    result = runner.invoke(app, ["coverage", "--project-dir", str(project), "--format", "json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    entries = {e["path"]: e for e in payload["coverage"]}
+    assert entries["tax_id"]["dropped"] is True
+    assert entries["total"]["dropped"] is False
+    assert payload["drops"] == 1
+
+    # Read-only: the baseline snapshot on disk is untouched.
+    baseline = json.loads((project / "fixtures" / "coverage_baseline.json").read_text())
+    assert baseline == {"total": 1.0, "vendor": 1.0, "tax_id": 1.0}
+
+
+def test_coverage_command_markdown(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    result = runner.invoke(app, ["coverage", "--project-dir", str(project), "--format", "md"])
+    assert result.exit_code == 0, result.output
+    assert "## extract-regress coverage" in result.output
+
+
+def test_coverage_rejects_unknown_format(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    result = runner.invoke(app, ["coverage", "--project-dir", str(project), "--format", "bogus"])
+    assert result.exit_code == 2, result.output
+    assert "unknown --format" in result.output
+
+
+# ---------------------------------------------------------------------------
+# run --out (#8)
+# ---------------------------------------------------------------------------
+
+
+def test_run_out_writes_markdown_artifact(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    # The parent directory does not exist yet: --out must create it.
+    out_path = project / "artifacts" / "report.md"
+    result = runner.invoke(
+        app,
+        ["run", "--project-dir", str(project), "--format", "md", "--out", str(out_path)],
+    )
+    assert result.exit_code == 0, result.output
+    assert out_path.read_text(encoding="utf-8") == cli._render(cli._LAST_REPORT, "md")
+
+
+def test_run_out_writes_json_artifact(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    out_path = project / "artifacts" / "report.json"
+    result = runner.invoke(
+        app,
+        ["run", "--project-dir", str(project), "--format", "json", "--out", str(out_path)],
+    )
+    assert result.exit_code == 0, result.output
+    assert out_path.read_text(encoding="utf-8") == cli._render(cli._LAST_REPORT, "json")
+
+
+def test_run_out_preserves_failure_exit_code(tmp_path: Path) -> None:
+    # --out must not change pass/fail semantics: a regression still exits 1 while
+    # the artifact is still written.
+    project = _setup_project(tmp_path, DRIFT_CONFTEST, with_goldens=True)
+    out_path = project / "report.json"
+    result = runner.invoke(
+        app,
+        ["run", "--project-dir", str(project), "--format", "json", "--out", str(out_path)],
+    )
+    assert result.exit_code == 1, result.output
+    assert out_path.read_text(encoding="utf-8") == cli._render(cli._LAST_REPORT, "json")
 
 
 def test_import_module_uses_unique_name_and_cleans_syspath(tmp_path: Path) -> None:
