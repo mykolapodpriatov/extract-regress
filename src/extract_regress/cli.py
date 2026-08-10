@@ -10,6 +10,9 @@ Commands mirror the pytest plugin options (plan §3.9):
 The live :data:`ExtractFn` (and judge) cannot live in TOML, so the CLI loads an
 :class:`ERConfig` from the user's ``conftest.py`` ``extract_regress_config()``
 hook, exactly like the plugin. ``--config-module`` points at that module.
+
+``record``, ``run``, and ``update`` accept a repeatable ``-k``/``--name`` option
+to target one or more fixtures by exact name instead of the full golden set.
 """
 
 from __future__ import annotations
@@ -136,6 +139,17 @@ def _warn_skipped(skipped: tuple[str, ...]) -> None:
         )
 
 
+def _names_or_none(name: list[str] | None) -> list[str] | None:
+    """Normalize an empty/absent ``-k`` selection to ``None``."""
+    return name or None
+
+
+def _exit_on_fixture_error(exc: FixtureError) -> typer.Exit:
+    """Report a :class:`FixtureError` (e.g. an unmatched ``-k`` name) and exit 2."""
+    typer.echo(f"error: {exc}", err=True)
+    return typer.Exit(code=2)
+
+
 def _check_format(report_format: str) -> None:
     """Reject an unknown ``--format`` value with a clear error (exit code 2).
 
@@ -175,6 +189,14 @@ FixturesDirOpt = Annotated[
     str | None,
     typer.Option("--fixtures-dir", help="Override the fixtures directory."),
 ]
+NameOpt = Annotated[
+    list[str] | None,
+    typer.Option(
+        "--name",
+        "-k",
+        help="Limit to the fixture(s) with this exact name (repeatable).",
+    ),
+]
 
 
 @app.command()
@@ -182,11 +204,15 @@ def record(
     config_module: ConfigModuleOpt = "conftest.py",
     project_dir: ProjectDirOpt = Path(),
     fixtures_dir: FixturesDirOpt = None,
+    name: NameOpt = None,
 ) -> None:
     """Build goldens for fixtures lacking them and refresh the snapshot."""
     config = _resolve_config(config_module, fixtures_dir, project_dir.resolve())
     runner = Runner(config)
-    written = runner.record()
+    try:
+        written = runner.record(names=_names_or_none(name))
+    except FixtureError as exc:
+        raise _exit_on_fixture_error(exc) from exc
     if written:
         typer.echo(f"recorded {len(written)} fixture(s): {', '.join(written)}")
     else:
@@ -199,11 +225,15 @@ def update(
     config_module: ConfigModuleOpt = "conftest.py",
     project_dir: ProjectDirOpt = Path(),
     fixtures_dir: FixturesDirOpt = None,
+    name: NameOpt = None,
 ) -> None:
     """Accept current outputs as the new goldens and refresh the snapshot."""
     config = _resolve_config(config_module, fixtures_dir, project_dir.resolve())
     runner = Runner(config)
-    written = runner.update()
+    try:
+        written = runner.update(names=_names_or_none(name))
+    except FixtureError as exc:
+        raise _exit_on_fixture_error(exc) from exc
     typer.echo(f"updated {len(written)} golden(s): {', '.join(written)}")
     _warn_skipped(runner.last_skipped)
 
@@ -213,6 +243,7 @@ def run(
     config_module: ConfigModuleOpt = "conftest.py",
     project_dir: ProjectDirOpt = Path(),
     fixtures_dir: FixturesDirOpt = None,
+    name: NameOpt = None,
     budget: Annotated[bool, typer.Option(help="Enforce cost/latency budgets.")] = True,
     report_format: Annotated[
         str, typer.Option("--format", help="Output format: term, md, or json.")
@@ -226,7 +257,10 @@ def run(
     global _LAST_REPORT
     _check_format(report_format)
     config = _resolve_config(config_module, fixtures_dir, project_dir.resolve())
-    report = Runner(config).run(check_budget=budget)
+    try:
+        report = Runner(config).run(check_budget=budget, names=_names_or_none(name))
+    except FixtureError as exc:
+        raise _exit_on_fixture_error(exc) from exc
     _LAST_REPORT = report
 
     rendered = _render(report, report_format)

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from extract_regress.config import ERConfig
-from extract_regress.fixtures import Fixture, FixtureStore
+from extract_regress.fixtures import Fixture, FixtureError, FixtureStore
 from extract_regress.runner import Runner, normalize_result
 from extract_regress.tolerances import ToleranceConfig, ToleranceRule
 from extract_regress.types import ExtractionResult, Usage
@@ -199,6 +199,108 @@ def test_errored_fixture_excluded_from_coverage_sample(fixtures_dir: Path) -> No
     assert not any(d.path == "tax_id" for d in report.dropped_coverage)
     # The errored fixture is still surfaced as a failing result.
     assert any(r.error == "boom" for r in report.results)
+
+
+# ---------------------------------------------------------------------------
+# -k / names filter (#10)
+# ---------------------------------------------------------------------------
+
+
+def test_run_names_filters_to_one_fixture(fixtures_dir: Path) -> None:
+    _seed(fixtures_dir, "a", "doc-a", {"total": 1})
+    _seed(fixtures_dir, "b", "doc-b", {"total": 2})
+    extractor = FakeExtractor({"doc-a": {"total": 1}, "doc-b": {"total": 2}})
+    config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
+
+    report = Runner(config).run(names=["a"])
+
+    assert [r.fixture_name for r in report.results] == ["a"]
+    # The unselected fixture is never extracted (no wasted/paid call).
+    assert extractor.calls == ["doc-a"]
+
+
+def test_run_names_accepts_multiple_values(fixtures_dir: Path) -> None:
+    _seed(fixtures_dir, "a", "doc-a", {"total": 1})
+    _seed(fixtures_dir, "b", "doc-b", {"total": 2})
+    _seed(fixtures_dir, "c", "doc-c", {"total": 3})
+    extractor = FakeExtractor({"doc-a": {"total": 1}, "doc-b": {"total": 2}, "doc-c": {"total": 3}})
+    config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
+
+    report = Runner(config).run(names=["a", "c"])
+
+    assert {r.fixture_name for r in report.results} == {"a", "c"}
+    assert sorted(extractor.calls) == ["doc-a", "doc-c"]
+
+
+def test_run_names_unknown_name_raises(fixtures_dir: Path) -> None:
+    _seed(fixtures_dir, "a", "doc-a", {"total": 1})
+    extractor = FakeExtractor({"doc-a": {"total": 1}})
+    config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
+
+    with pytest.raises(FixtureError, match="nonexistent"):
+        Runner(config).run(names=["nonexistent"])
+    # Nothing was extracted before the error was raised.
+    assert extractor.calls == []
+
+
+def test_record_names_filters_extraction_and_write(fixtures_dir: Path) -> None:
+    _seed_unrecorded(fixtures_dir, "a", "doc-a")
+    _seed_unrecorded(fixtures_dir, "b", "doc-b")
+    extractor = FakeExtractor({"doc-a": {"total": 1}, "doc-b": {"total": 2}})
+    config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
+
+    written = Runner(config).record(names=["a"])
+
+    assert written == ["a"]
+    assert extractor.calls == ["doc-a"]  # "b" was never extracted
+    assert FixtureStore(fixtures_dir).load("a").expected == {"total": 1}
+    assert not FixtureStore(fixtures_dir).load("b").has_golden()
+
+
+def test_record_names_coverage_sample_includes_full_on_disk_set(fixtures_dir: Path) -> None:
+    # "b" already has a golden with a field the filtered fixture lacks; the
+    # refreshed coverage snapshot must still count it even though a filtered
+    # ``record -k a`` never touches "b".
+    _seed_unrecorded(fixtures_dir, "a", "doc-a")
+    _seed(fixtures_dir, "b", "doc-b", {"total": 2, "tax_id": "X1"})
+    extractor = FakeExtractor({"doc-a": {"total": 1}, "doc-b": {"total": 2, "tax_id": "X1"}})
+    config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
+
+    Runner(config).record(names=["a"])
+
+    from extract_regress.coverage import load_baseline
+
+    baseline = load_baseline(fixtures_dir)
+    # "tax_id" appears in 1 of the 2 on-disk fixtures ("b", never extracted
+    # this run). A baseline computed from only the filtered subset (just "a")
+    # would show 0.0 here instead of the full-corpus 0.5.
+    assert baseline["tax_id"] == 0.5
+
+
+def test_update_names_multiple_values(fixtures_dir: Path) -> None:
+    _seed(fixtures_dir, "a", "doc-a", {"total": -1})
+    _seed(fixtures_dir, "b", "doc-b", {"total": -2})
+    _seed(fixtures_dir, "c", "doc-c", {"total": -3})
+    extractor = FakeExtractor({"doc-a": {"total": 1}, "doc-b": {"total": 2}, "doc-c": {"total": 3}})
+    config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
+
+    written = Runner(config).update(names=["a", "c"])
+
+    assert sorted(written) == ["a", "c"]
+    assert FixtureStore(fixtures_dir).load("a").expected == {"total": 1}
+    assert FixtureStore(fixtures_dir).load("c").expected == {"total": 3}
+    # "b" was neither extracted nor overwritten.
+    assert FixtureStore(fixtures_dir).load("b").expected == {"total": -2}
+    assert sorted(extractor.calls) == ["doc-a", "doc-c"]
+
+
+def test_update_names_unknown_name_raises(fixtures_dir: Path) -> None:
+    _seed(fixtures_dir, "a", "doc-a", {"total": 1})
+    extractor = FakeExtractor({"doc-a": {"total": 1}})
+    config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
+
+    with pytest.raises(FixtureError, match="nonexistent"):
+        Runner(config).update(names=["nonexistent"])
 
 
 # ---------------------------------------------------------------------------

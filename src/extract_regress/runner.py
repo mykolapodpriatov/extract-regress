@@ -8,7 +8,7 @@ supports the ``record`` / ``update`` write modes and the read-only ``run`` mode.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from typing import Any
 
@@ -16,7 +16,7 @@ from . import coverage as coverage_mod
 from .budget import evaluate_budget
 from .config import ERConfig
 from .diff import diff_extraction
-from .fixtures import Fixture, FixtureStore
+from .fixtures import Fixture, FixtureError, FixtureStore
 from .types import (
     BudgetOutcome,
     ExtractionResult,
@@ -68,9 +68,13 @@ class Runner:
 
     # -- public API --------------------------------------------------------
 
-    def run(self, *, check_budget: bool = True) -> RunReport:
-        """Replay every fixture and produce a :class:`RunReport` (read-only)."""
-        fixtures = self.store.load_all()
+    def run(self, *, check_budget: bool = True, names: Sequence[str] | None = None) -> RunReport:
+        """Replay every fixture and produce a :class:`RunReport` (read-only).
+
+        ``names``, if given, limits the replay to fixtures with an exact name
+        match (see :meth:`_select`); every other fixture on disk is left alone.
+        """
+        fixtures = self._select(self.store.load_all(), names)
         results: list[FixtureResult] = []
         usages: list[Usage] = []
         current_extractions: list[dict[str, Any]] = []
@@ -105,7 +109,7 @@ class Runner:
             budget=budget,
         )
 
-    def record(self, *, overwrite: bool = False) -> list[str]:
+    def record(self, *, overwrite: bool = False, names: Sequence[str] | None = None) -> list[str]:
         """Fill goldens (idempotent) and rewrite the coverage snapshot.
 
         With ``overwrite`` false (the ``record`` semantics), only fixtures
@@ -116,13 +120,26 @@ class Runner:
         would pin an empty ``{}`` and produce false FAILs forever) and never
         contributes to the coverage sample; such fixtures are skipped and their
         names collected in ``skipped`` for the caller to surface.
+
+        ``names``, if given, limits *extraction* (and therefore writing) to
+        fixtures with an exact name match (see :meth:`_select`). Fixtures
+        outside the filter are never extracted, but a fixture that already has
+        a golden still contributes it to the coverage sample, so the refreshed
+        snapshot reflects the full on-disk golden set rather than just the
+        filtered subset.
         """
         fixtures = self.store.load_all()
+        selected_names = {f.name for f in self._select(fixtures, names)}
         written: list[str] = []
         skipped: list[str] = []
         sampled: list[dict[str, Any]] = []
 
         for fixture in fixtures:
+            if fixture.name not in selected_names:
+                if fixture.has_golden():
+                    sampled.append(fixture.expected)
+                continue
+
             extraction = self._extract(fixture)
 
             if extraction.error is not None:
@@ -143,11 +160,28 @@ class Runner:
         self._refresh_baseline(sampled)
         return written
 
-    def update(self) -> list[str]:
+    def update(self, *, names: Sequence[str] | None = None) -> list[str]:
         """Accept current outputs as the new goldens; refresh the snapshot."""
-        return self.record(overwrite=True)
+        return self.record(overwrite=True, names=names)
 
     # -- helpers -----------------------------------------------------------
+
+    def _select(self, fixtures: list[Fixture], names: Sequence[str] | None) -> list[Fixture]:
+        """Filter ``fixtures`` down to an exact-name match against ``names``.
+
+        ``names`` is ``None`` or empty returns ``fixtures`` unchanged. Every
+        given name must match at least one loaded fixture; an unmatched name
+        raises :class:`FixtureError` instead of silently running zero
+        fixtures.
+        """
+        if not names:
+            return fixtures
+        by_name = {fixture.name: fixture for fixture in fixtures}
+        missing = [name for name in names if name not in by_name]
+        if missing:
+            raise FixtureError(f"no fixture(s) matching name(s): {', '.join(missing)}")
+        wanted = set(names)
+        return [fixture for fixture in fixtures if fixture.name in wanted]
 
     def _coverage_deltas(self, extractions: list[dict[str, Any]]) -> list[Any]:
         baseline = coverage_mod.load_baseline(self.config.fixtures_dir)
