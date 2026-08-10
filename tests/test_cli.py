@@ -252,6 +252,98 @@ def _write_fixture(fixtures: Path, name: str, payload: dict[str, object]) -> Non
 
 
 # ---------------------------------------------------------------------------
+# -k / --name filter (#10)
+# ---------------------------------------------------------------------------
+
+
+def test_record_dash_k_filters_to_one_fixture(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
+    rec = runner.invoke(app, ["record", "--project-dir", str(project), "-k", "invoice_a"])
+    assert rec.exit_code == 0, rec.output
+    assert "recorded 1 fixture(s): invoice_a" in rec.output
+
+    golden_a = json.loads((project / "fixtures" / "invoice_a.json").read_text())
+    assert golden_a["expected"] == {"total": 100, "vendor": "ACME"}
+    # The unselected fixture is left untouched (no golden written).
+    golden_b = json.loads((project / "fixtures" / "invoice_b.json").read_text())
+    assert "expected" not in golden_b
+
+
+def test_record_dash_k_unknown_name_exits_nonzero(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
+    rec = runner.invoke(app, ["record", "--project-dir", str(project), "-k", "does_not_exist"])
+    assert rec.exit_code == 2, rec.output
+    assert "does_not_exist" in rec.output
+    # Nothing was recorded for the still-present fixtures.
+    for name in ("invoice_a", "invoice_b"):
+        golden = json.loads((project / "fixtures" / f"{name}.json").read_text())
+        assert "expected" not in golden
+
+
+def test_run_dash_k_accepts_multiple_values(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    run = runner.invoke(
+        app,
+        [
+            "run",
+            "--project-dir",
+            str(project),
+            "-k",
+            "invoice_a",
+            "-k",
+            "invoice_b",
+            "--format",
+            "json",
+        ],
+    )
+    assert run.exit_code == 0, run.output
+    payload = json.loads(run.output)
+    assert payload["summary"]["fixtures"] == 2
+
+
+def test_run_dash_k_filters_to_one_fixture(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    run = runner.invoke(
+        app,
+        ["run", "--project-dir", str(project), "--name", "invoice_a", "--format", "json"],
+    )
+    assert run.exit_code == 0, run.output
+    payload = json.loads(run.output)
+    assert payload["summary"]["fixtures"] == 1
+    assert payload["fixtures"][0]["fixture"] == "invoice_a"
+
+
+def test_run_dash_k_unknown_name_exits_nonzero(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    run = runner.invoke(app, ["run", "--project-dir", str(project), "-k", "nope"])
+    assert run.exit_code == 2, run.output
+    assert "nope" in run.output
+
+
+def test_update_dash_k_filters_to_one_fixture(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    # Corrupt both goldens; only "invoice_a" should be refreshed by -k.
+    for name, bad in [
+        ("invoice_a", {"total": -1, "vendor": "STALE"}),
+        ("invoice_b", {"total": -2, "vendor": "STALE"}),
+    ]:
+        path = project / "fixtures" / f"{name}.json"
+        payload = json.loads(path.read_text())
+        payload["expected"] = bad
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    upd = runner.invoke(app, ["update", "--project-dir", str(project), "-k", "invoice_a"])
+    assert upd.exit_code == 0, upd.output
+    assert "updated 1 golden(s): invoice_a" in upd.output
+
+    restored_a = json.loads((project / "fixtures" / "invoice_a.json").read_text())
+    assert restored_a["expected"] == {"total": 100, "vendor": "ACME"}
+    # "invoice_b" was left with its corrupted golden (outside the filter).
+    still_stale_b = json.loads((project / "fixtures" / "invoice_b.json").read_text())
+    assert still_stale_b["expected"] == {"total": -2, "vendor": "STALE"}
+
+
+# ---------------------------------------------------------------------------
 # validate (#6)
 # ---------------------------------------------------------------------------
 
