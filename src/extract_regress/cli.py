@@ -31,7 +31,7 @@ import typer
 from .config import ERConfig, load_project_config
 from .coverage import compute_fill_rates, diff_coverage, load_baseline
 from .fixtures import FixtureError, FixtureStore
-from .report import render_coverage, render_json, render_markdown, render_terminal
+from .report import render_coverage, render_json, render_junit, render_markdown, render_terminal
 from .runner import Runner
 from .types import RunReport
 
@@ -253,6 +253,10 @@ def run(
         Path | None,
         typer.Option("--out", help="Also write the rendered report to this path."),
     ] = None,
+    junit_xml: Annotated[
+        Path | None,
+        typer.Option("--junit-xml", help="Also write a JUnit XML report to this path."),
+    ] = None,
 ) -> None:
     """Replay fixtures and check; exit non-zero on regression or budget breach."""
     global _LAST_REPORT
@@ -272,6 +276,10 @@ def run(
         # file never carries ANSI escapes.
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(rendered, encoding="utf-8")
+    if junit_xml is not None:
+        # Independent of --format / --out: CI ingest is a separate artifact.
+        junit_xml.parent.mkdir(parents=True, exist_ok=True)
+        junit_xml.write_text(render_junit(report), encoding="utf-8")
 
     raise typer.Exit(code=0 if report.passed else 1)
 
