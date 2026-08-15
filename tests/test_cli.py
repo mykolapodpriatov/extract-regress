@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import xml.etree.ElementTree as ET
@@ -439,6 +440,89 @@ def test_validate_escaping_ref_exits_two(tmp_path: Path) -> None:
     result = runner.invoke(app, ["validate", "--project-dir", str(project)])
     assert result.exit_code == 2, result.output
     assert "escapes the fixture directory" in result.output
+
+
+def _add_source_ref_fixture(
+    project: Path,
+    name: str,
+    text: str,
+    *,
+    digest: str | None = "",
+    expected: dict[str, object] | None = None,
+) -> Path:
+    fixtures = project / "fixtures"
+    samples = fixtures / "samples"
+    samples.mkdir(exist_ok=True)
+    src = samples / f"{name}.txt"
+    src.write_text(text, encoding="utf-8")
+    payload: dict[str, object] = {
+        "version": 1,
+        "name": name,
+        "source_ref": f"samples/{name}.txt",
+    }
+    if expected is not None:
+        payload["expected"] = expected
+    if digest is None:
+        pass
+    elif digest == "":
+        payload["source_sha256"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    else:
+        payload["source_sha256"] = digest
+    _write_fixture(fixtures, name, payload)
+    return src
+
+
+def test_validate_unchanged_source_ref_passes(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
+    _add_source_ref_fixture(project, "invoice_basic", "doc-a")
+    result = runner.invoke(app, ["validate", "--project-dir", str(project)])
+    assert result.exit_code == 0, result.output
+    assert "invoice_basic: OK" in result.output
+
+
+def test_validate_one_byte_edit_fails_with_fixture_name(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
+    src = _add_source_ref_fixture(project, "invoice_basic", "doc-a")
+    src.write_bytes(src.read_bytes() + b"x")
+    result = runner.invoke(app, ["validate", "--project-dir", str(project)])
+    assert result.exit_code == 2, result.output
+    assert "source drifted" in result.output
+    assert "invoice_basic" in result.output
+
+
+def test_validate_source_ref_missing_digest_fails(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
+    _add_source_ref_fixture(project, "legacy_ref", "doc-a", digest=None)
+    result = runner.invoke(app, ["validate", "--project-dir", str(project)])
+    assert result.exit_code == 2, result.output
+    assert "legacy_ref" in result.output
+    assert "source_sha256" in result.output
+
+
+def test_run_one_byte_edit_fails_with_fixture_name(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    src = _add_source_ref_fixture(
+        project,
+        "invoice_basic",
+        "doc-a",
+        expected={"total": 100, "vendor": "ACME"},
+    )
+    src.write_bytes(src.read_bytes() + b"x")
+    result = runner.invoke(app, ["run", "--project-dir", str(project), "-k", "invoice_basic"])
+    assert result.exit_code == 2, result.output
+    assert "source drifted" in result.output
+    assert "invoice_basic" in result.output
+
+
+def test_record_writes_source_sha256(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
+    _add_source_ref_fixture(project, "invoice_basic", "doc-a", digest=None)
+    rec = runner.invoke(
+        app, ["record", "--project-dir", str(project), "-k", "invoice_basic"]
+    )
+    assert rec.exit_code == 0, rec.output
+    raw = json.loads((project / "fixtures" / "invoice_basic.json").read_text())
+    assert raw["source_sha256"] == hashlib.sha256(b"doc-a").hexdigest()
 
 
 def test_validate_bad_json_exits_two(tmp_path: Path) -> None:

@@ -44,6 +44,7 @@ class Fixture(BaseModel):
     name: str
     source_ref: str | None = None
     source_inline: str | None = None
+    source_sha256: str | None = None
     expected: dict[str, Any] = Field(default_factory=dict)
     recorded_with: RecordedWith = Field(default_factory=RecordedWith)
 
@@ -99,6 +100,50 @@ class Fixture(BaseModel):
                 f"fixture directory {base}; references must stay inside it"
             )
         return resolved
+
+    def hash_source(self) -> str:
+        """Return the sha256 hex digest of the resolved ``source_ref`` bytes.
+
+        Inline sources have no on-disk file to pin; calling this on one raises
+        :class:`FixtureError`.
+        """
+        source = self.resolve_source()
+        if not isinstance(source, Path):
+            raise FixtureError(f"cannot hash inline source for fixture {self.name!r}")
+        try:
+            data = source.read_bytes()
+        except OSError as exc:
+            raise FixtureError(
+                f"cannot read source_ref {self.source_ref!r} for fixture {self.name!r}: {exc}"
+            ) from exc
+        return hashlib.sha256(data).hexdigest()
+
+    def check_source_digest(self, *, require_digest: bool = False) -> None:
+        """Re-hash a ``source_ref`` file and fail if it no longer matches.
+
+        Inline sources are skipped. When ``require_digest`` is true (validate),
+        a ``source_ref`` fixture with no ``source_sha256`` is also an error so
+        old goldens get backfilled on the next ``update``. A mismatch raises
+        :class:`FixtureError` containing ``source drifted`` and the fixture
+        name, so callers can fail before treating this as an extraction
+        regression.
+        """
+        if self.source_ref is None:
+            return
+        self.resolve_source()
+        if self.source_sha256 is None:
+            if require_digest:
+                raise FixtureError(
+                    f"source_ref fixture {self.name!r} has no source_sha256; "
+                    "re-run update to pin the digest"
+                )
+            return
+        digest = self.hash_source()
+        if digest != self.source_sha256:
+            raise FixtureError(
+                f"source drifted: {self.name} "
+                f"(pinned {self.source_sha256}, now {digest})"
+            )
 
     def has_golden(self) -> bool:
         """Whether this fixture already has a recorded golden.
@@ -187,5 +232,8 @@ class FixtureStore:
         self.fixtures_dir.mkdir(parents=True, exist_ok=True)
         path = self.path_for(fixture.name)
         payload = fixture.model_dump(mode="json", exclude_none=False)
+        # Inline fixtures skip the digest; omit a null so we don't write noise.
+        if payload.get("source_sha256") is None:
+            payload.pop("source_sha256", None)
         path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
         return path
