@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from io import StringIO
 from typing import Any
@@ -10,11 +11,12 @@ from typing import Any
 from rich.console import Console
 from rich.table import Table
 
-from .types import CoverageDelta, FieldDiff, RunReport
+from .types import CoverageDelta, FieldDiff, FixtureResult, RunReport
 
 __all__ = [
     "render_coverage",
     "render_json",
+    "render_junit",
     "render_markdown",
     "render_pr_comment",
     "render_terminal",
@@ -213,6 +215,58 @@ def render_json(report: RunReport) -> str:
         },
     }
     return json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False, default=str)
+
+
+def _junit_failure_message(result: FixtureResult) -> str:
+    """One-line field-level mismatch (or extraction-error) summary."""
+    if result.error is not None:
+        return result.error
+    parts: list[str] = []
+    for diff in result.failing_diffs:
+        detail = (
+            f"{diff.path}: {diff.kind} golden={_truncate(diff.golden)} "
+            f"actual={_truncate(diff.actual)}"
+        )
+        if diff.reason:
+            detail = f"{detail} ({diff.reason})"
+        parts.append(detail)
+    return "; ".join(parts) or f"{result.fixture_name} failed"
+
+
+def render_junit(report: RunReport) -> str:
+    """Render the run as a JUnit XML test report.
+
+    One ``<testcase>`` is emitted per fixture (``name`` is the fixture name).
+    A field mismatch or extraction error becomes a ``<failure>`` on that case
+    whose message is the field-level summary. A budget breach is a suite-level
+    ``<failure>`` on the ``<testsuite>`` so CI still flags the run when every
+    fixture passed its field checks.
+    """
+    failures = 0
+    root = ET.Element("testsuites")
+    suite = ET.SubElement(
+        root,
+        "testsuite",
+        name="extract-regress",
+        tests=str(len(report.results)),
+        failures="0",
+    )
+    for result in report.results:
+        case = ET.SubElement(suite, "testcase", classname="fixture", name=result.fixture_name)
+        if not result.passed:
+            failures += 1
+            message = _junit_failure_message(result)
+            failure = ET.SubElement(case, "failure", type="regression", message=message)
+            failure.text = message
+    if report.budget.failing:
+        failures += 1
+        message = "; ".join(report.budget.messages) or "budget exceeded"
+        failure = ET.SubElement(suite, "failure", type="budget", message=message)
+        failure.text = message
+    suite.set("failures", str(failures))
+    ET.indent(root)
+    body = ET.tostring(root, encoding="unicode")
+    return f'<?xml version="1.0" encoding="utf-8"?>\n{body}\n'
 
 
 def _coverage_terminal(deltas: Sequence[CoverageDelta]) -> str:

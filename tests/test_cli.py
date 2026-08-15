@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -520,6 +521,48 @@ def test_run_out_writes_json_artifact(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert out_path.read_text(encoding="utf-8") == cli._render(cli._LAST_REPORT, "json")
+
+
+def test_run_junit_xml_passing_has_no_failures(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    junit = project / "artifacts" / "junit.xml"
+    result = runner.invoke(
+        app,
+        ["run", "--project-dir", str(project), "--junit-xml", str(junit)],
+    )
+    assert result.exit_code == 0, result.output
+    tree = ET.fromstring(junit.read_text(encoding="utf-8"))
+    assert tree.findall(".//failure") == []
+    suite = tree.find(".//testsuite")
+    assert suite is not None
+    assert suite.get("failures") == "0"
+
+
+def test_run_junit_xml_field_mismatch_names_fixture(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, DRIFT_CONFTEST, with_goldens=True)
+    junit = project / "junit.xml"
+    result = runner.invoke(
+        app,
+        ["run", "--project-dir", str(project), "--junit-xml", str(junit)],
+    )
+    assert result.exit_code == 1, result.output
+    tree = ET.fromstring(junit.read_text(encoding="utf-8"))
+    cases = {tc.get("name"): tc for tc in tree.findall(".//testcase")}
+    assert "invoice_a" in cases
+    assert cases["invoice_a"].findall("failure")
+    assert "vendor" in (cases["invoice_a"].find("failure").get("message") or "")
+
+
+def test_run_junit_xml_creates_missing_parent(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    junit = project / "nested" / "ci" / "junit.xml"
+    result = runner.invoke(
+        app,
+        ["run", "--project-dir", str(project), "--junit-xml", str(junit)],
+    )
+    assert result.exit_code == 0, result.output
+    assert junit.is_file()
+    ET.fromstring(junit.read_text(encoding="utf-8"))
 
 
 def test_run_out_preserves_failure_exit_code(tmp_path: Path) -> None:

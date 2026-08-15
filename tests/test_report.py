@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import xml.etree.ElementTree as ET
 
 from extract_regress.report import (
     render_json,
+    render_junit,
     render_markdown,
     render_terminal,
     summary_line,
@@ -165,3 +167,29 @@ def test_render_json_passing_status_and_sorted_keys() -> None:
     top_keys = ["budget", "coverage_drops", "fixtures", "status", "summary"]
     positions = [text.index(f'"{key}"') for key in top_keys]
     assert positions == sorted(positions)
+
+
+def test_render_junit_passing_has_no_failures() -> None:
+    xml = render_junit(_passing_report())
+    assert xml.startswith("<?xml")
+    tree = ET.fromstring(xml)
+    assert tree.findall(".//failure") == []
+    suite = tree.find(".//testsuite")
+    assert suite is not None
+    assert suite.get("name") == "extract-regress"
+    assert suite.get("failures") == "0"
+    cases = tree.findall(".//testcase")
+    assert [tc.get("name") for tc in cases] == ["ok"]
+
+
+def test_render_junit_field_mismatch_is_failed_testcase() -> None:
+    tree = ET.fromstring(render_junit(_failing_report()))
+    case = next(tc for tc in tree.findall(".//testcase") if tc.get("name") == "bad")
+    failures = case.findall("failure")
+    assert failures
+    assert "vendor" in (failures[0].get("message") or "")
+    assert "ACME" in (failures[0].get("message") or "")
+    # Budget breach is suite-level, not attached to the fixture testcase.
+    suite = tree.find(".//testsuite")
+    assert suite is not None
+    assert any(child.tag == "failure" and child.get("type") == "budget" for child in suite)
