@@ -107,11 +107,13 @@ beyond the coverage threshold, or a cost/latency budget is exceeded.
 | `extract-regress update` | Accept current outputs as the new goldens; refresh the snapshot. |
 | `extract-regress report --format term\|md\|json` | Render the last run. |
 
-`record`, `run`, and `update` accept a repeatable `-k`/`--name NAME` option to
-target one or more fixtures by exact name instead of the full golden set, e.g.
-`extract-regress record -k invoice_123`. The coverage snapshot refresh after a
-filtered `record`/`update` is still computed from the full on-disk golden set,
-not just the filtered subset.
+`record`, `run`, and `update` accept a repeatable `-k`/`--name PATTERN` option
+to target one or more fixtures by `fnmatch`-style glob instead of the full
+golden set, e.g. `extract-regress record -k invoice_123` or
+`extract-regress run -k 'invoice_*'`. A pattern with no glob metacharacters
+is still an exact name match. Multiple `-k` values compose as a union. The
+coverage snapshot refresh after a filtered `record`/`update` is still computed
+from the full on-disk golden set, not just the filtered subset.
 
 ## Configuration
 

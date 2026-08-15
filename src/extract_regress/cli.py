@@ -12,7 +12,8 @@ The live :data:`ExtractFn` (and judge) cannot live in TOML, so the CLI loads an
 hook, exactly like the plugin. ``--config-module`` points at that module.
 
 ``record``, ``run``, and ``update`` accept a repeatable ``-k``/``--name`` option
-to target one or more fixtures by exact name instead of the full golden set.
+to target one or more fixtures by ``fnmatch``-style glob (a plain name is still
+an exact match) instead of the full golden set.
 """
 
 from __future__ import annotations
@@ -194,7 +195,7 @@ NameOpt = Annotated[
     typer.Option(
         "--name",
         "-k",
-        help="Limit to the fixture(s) with this exact name (repeatable).",
+        help="Limit to fixture(s) matching this fnmatch glob (repeatable).",
     ),
 ]
 

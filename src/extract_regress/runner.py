@@ -8,6 +8,7 @@ supports the ``record`` / ``update`` write modes and the read-only ``run`` mode.
 
 from __future__ import annotations
 
+import fnmatch
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from typing import Any
@@ -71,8 +72,9 @@ class Runner:
     def run(self, *, check_budget: bool = True, names: Sequence[str] | None = None) -> RunReport:
         """Replay every fixture and produce a :class:`RunReport` (read-only).
 
-        ``names``, if given, limits the replay to fixtures with an exact name
-        match (see :meth:`_select`); every other fixture on disk is left alone.
+        ``names``, if given, limits the replay to fixtures whose names match
+        any of the given ``fnmatch`` patterns (see :meth:`_select`); every
+        other fixture on disk is left alone.
         """
         fixtures = self._select(self.store.load_all(), names)
         results: list[FixtureResult] = []
@@ -122,11 +124,11 @@ class Runner:
         names collected in ``skipped`` for the caller to surface.
 
         ``names``, if given, limits *extraction* (and therefore writing) to
-        fixtures with an exact name match (see :meth:`_select`). Fixtures
-        outside the filter are never extracted, but a fixture that already has
-        a golden still contributes it to the coverage sample, so the refreshed
-        snapshot reflects the full on-disk golden set rather than just the
-        filtered subset.
+        fixtures whose names match any of the given ``fnmatch`` patterns
+        (see :meth:`_select`). Fixtures outside the filter are never
+        extracted, but a fixture that already has a golden still contributes
+        it to the coverage sample, so the refreshed snapshot reflects the
+        full on-disk golden set rather than just the filtered subset.
         """
         fixtures = self.store.load_all()
         selected_names = {f.name for f in self._select(fixtures, names)}
@@ -167,21 +169,31 @@ class Runner:
     # -- helpers -----------------------------------------------------------
 
     def _select(self, fixtures: list[Fixture], names: Sequence[str] | None) -> list[Fixture]:
-        """Filter ``fixtures`` down to an exact-name match against ``names``.
+        """Filter ``fixtures`` down to those matching any ``fnmatch`` pattern.
 
-        ``names`` is ``None`` or empty returns ``fixtures`` unchanged. Every
-        given name must match at least one loaded fixture; an unmatched name
-        raises :class:`FixtureError` instead of silently running zero
-        fixtures.
+        Each entry in ``names`` is treated as an :func:`fnmatch.fnmatchcase`
+        pattern, so a plain name (no glob metacharacters) is still an exact
+        match. Multiple patterns compose as a union. ``names`` of ``None`` or
+        empty returns ``fixtures`` unchanged.
+
+        Every given pattern must match at least one loaded fixture; a pattern
+        that matches nothing raises :class:`FixtureError` instead of silently
+        running zero fixtures.
         """
         if not names:
             return fixtures
-        by_name = {fixture.name: fixture for fixture in fixtures}
-        missing = [name for name in names if name not in by_name]
+        missing = [
+            pattern
+            for pattern in names
+            if not any(fnmatch.fnmatchcase(fixture.name, pattern) for fixture in fixtures)
+        ]
         if missing:
             raise FixtureError(f"no fixture(s) matching name(s): {', '.join(missing)}")
-        wanted = set(names)
-        return [fixture for fixture in fixtures if fixture.name in wanted]
+        return [
+            fixture
+            for fixture in fixtures
+            if any(fnmatch.fnmatchcase(fixture.name, pattern) for pattern in names)
+        ]
 
     def _coverage_deltas(self, extractions: list[dict[str, Any]]) -> list[Any]:
         baseline = coverage_mod.load_baseline(self.config.fixtures_dir)

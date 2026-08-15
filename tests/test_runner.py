@@ -303,6 +303,52 @@ def test_update_names_unknown_name_raises(fixtures_dir: Path) -> None:
         Runner(config).update(names=["nonexistent"])
 
 
+def test_run_names_glob_matches_multiple_fixtures(fixtures_dir: Path) -> None:
+    _seed(fixtures_dir, "invoice_a", "doc-a", {"total": 1})
+    _seed(fixtures_dir, "invoice_b", "doc-b", {"total": 2})
+    _seed(fixtures_dir, "receipt_a", "doc-c", {"total": 3})
+    extractor = FakeExtractor(
+        {"doc-a": {"total": 1}, "doc-b": {"total": 2}, "doc-c": {"total": 3}}
+    )
+    config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
+
+    report = Runner(config).run(names=["invoice_*"])
+
+    assert {r.fixture_name for r in report.results} == {"invoice_a", "invoice_b"}
+    assert sorted(extractor.calls) == ["doc-a", "doc-b"]
+
+
+def test_run_names_glob_matching_nothing_raises(fixtures_dir: Path) -> None:
+    _seed(fixtures_dir, "invoice_a", "doc-a", {"total": 1})
+    extractor = FakeExtractor({"doc-a": {"total": 1}})
+    config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
+
+    with pytest.raises(FixtureError, match="nope_\\*"):
+        Runner(config).run(names=["nope_*"])
+    assert extractor.calls == []
+
+
+def test_run_names_mixes_exact_and_glob(fixtures_dir: Path) -> None:
+    _seed(fixtures_dir, "invoice_a", "doc-a", {"total": 1})
+    _seed(fixtures_dir, "doc_x", "doc-x", {"total": 2})
+    _seed(fixtures_dir, "doc_y", "doc-y", {"total": 3})
+    _seed(fixtures_dir, "other", "doc-o", {"total": 4})
+    extractor = FakeExtractor(
+        {
+            "doc-a": {"total": 1},
+            "doc-x": {"total": 2},
+            "doc-y": {"total": 3},
+            "doc-o": {"total": 4},
+        }
+    )
+    config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
+
+    report = Runner(config).run(names=["invoice_a", "doc_*"])
+
+    assert {r.fixture_name for r in report.results} == {"invoice_a", "doc_x", "doc_y"}
+    assert sorted(extractor.calls) == ["doc-a", "doc-x", "doc-y"]
+
+
 # ---------------------------------------------------------------------------
 # budget + coverage integration
 # ---------------------------------------------------------------------------

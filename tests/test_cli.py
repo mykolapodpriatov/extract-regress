@@ -320,6 +320,64 @@ def test_run_dash_k_unknown_name_exits_nonzero(tmp_path: Path) -> None:
     assert "nope" in run.output
 
 
+def test_run_dash_k_glob_matches_multiple_fixtures(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    run = runner.invoke(
+        app,
+        ["run", "--project-dir", str(project), "-k", "invoice_*", "--format", "json"],
+    )
+    assert run.exit_code == 0, run.output
+    payload = json.loads(run.output)
+    assert payload["summary"]["fixtures"] == 2
+    assert {f["fixture"] for f in payload["fixtures"]} == {"invoice_a", "invoice_b"}
+
+
+def test_run_dash_k_glob_matching_nothing_exits_nonzero(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    run = runner.invoke(app, ["run", "--project-dir", str(project), "-k", "nope_*"])
+    assert run.exit_code == 2, run.output
+    assert "nope_*" in run.output
+
+
+def test_run_dash_k_mixes_exact_with_glob_pattern(tmp_path: Path) -> None:
+    project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
+    # Add a third fixture so an exact name + a glob is a real union, not a
+    # coincidence of two exact names.
+    fixtures = project / "fixtures"
+    _write_fixture(
+        fixtures,
+        "receipt_a",
+        {
+            "version": 1,
+            "name": "receipt_a",
+            "source_inline": "doc-a",
+            "expected": {"total": 100, "vendor": "ACME"},
+        },
+    )
+    run = runner.invoke(
+        app,
+        [
+            "run",
+            "--project-dir",
+            str(project),
+            "-k",
+            "receipt_a",
+            "-k",
+            "invoice_*",
+            "--format",
+            "json",
+        ],
+    )
+    assert run.exit_code == 0, run.output
+    payload = json.loads(run.output)
+    assert payload["summary"]["fixtures"] == 3
+    assert {f["fixture"] for f in payload["fixtures"]} == {
+        "invoice_a",
+        "invoice_b",
+        "receipt_a",
+    }
+
+
 def test_update_dash_k_filters_to_one_fixture(tmp_path: Path) -> None:
     project = _setup_project(tmp_path, CONFTEST, with_goldens=True)
     # Corrupt both goldens; only "invoice_a" should be refreshed by -k.
