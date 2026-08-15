@@ -314,9 +314,11 @@ def validate(
 
     Loads and validates each fixture (schema, mutually-exclusive
     ``source_ref``/``source_inline``, on-disk version) and resolves every
-    ``source_ref`` to confirm it stays inside the fixture directory. Runs no
-    extraction and makes no LLM call. Prints a per-fixture ``OK``/error line and
-    exits 0 when all fixtures are valid, else 2.
+    ``source_ref`` to confirm it stays inside the fixture directory. Re-hashes
+    each pinned ``source_ref`` and fails on drift or a missing
+    ``source_sha256``. Runs no extraction and makes no LLM call. Prints a
+    per-fixture ``OK``/error line and exits 0 when all fixtures are valid,
+    else 2.
     """
     config = _resolve_config(config_module, fixtures_dir, project_dir.resolve())
     store = FixtureStore(config.fixtures_dir)
@@ -334,6 +336,7 @@ def validate(
     for fixture in fixtures:
         try:
             fixture.resolve_source()
+            fixture.check_source_digest(require_digest=True)
         except FixtureError as exc:
             typer.echo(f"{fixture.name}: error: {exc}", err=True)
             valid = False

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -126,6 +127,74 @@ def test_source_ref_cannot_be_absolute_path(tmp_path: Path) -> None:
     fixture = FixtureStore(fdir).load("evil")
     with pytest.raises(FixtureError, match="escapes the fixture directory"):
         fixture.resolve_source()
+
+
+def _write_ref_fixture(
+    fixtures_dir: Path,
+    name: str,
+    text: str,
+    *,
+    digest: str | None = "",
+) -> Path:
+    """Write a source_ref fixture and its sample file.
+
+    ``digest=""`` (default) pins the current file hash. ``digest=None`` omits
+    ``source_sha256`` (legacy golden). Any other string is stored as-is.
+    """
+    samples = fixtures_dir / "samples"
+    samples.mkdir(exist_ok=True)
+    src = samples / f"{name}.txt"
+    src.write_text(text, encoding="utf-8")
+    payload: dict[str, object] = {
+        "version": 1,
+        "name": name,
+        "source_ref": f"samples/{name}.txt",
+        "expected": {"total": 1},
+    }
+    if digest is None:
+        pass
+    elif digest == "":
+        payload["source_sha256"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    else:
+        payload["source_sha256"] = digest
+    _write(fixtures_dir / f"{name}.json", payload)
+    return src
+
+
+def test_source_digest_unchanged_file_passes(tmp_path: Path) -> None:
+    fdir = tmp_path / "fixtures"
+    fdir.mkdir()
+    _write_ref_fixture(fdir, "invoice_basic", "hello")
+    fixture = FixtureStore(fdir).load("invoice_basic")
+    fixture.check_source_digest(require_digest=True)
+    assert fixture.source_sha256 == hashlib.sha256(b"hello").hexdigest()
+
+
+def test_source_digest_one_byte_edit_fails_with_fixture_name(tmp_path: Path) -> None:
+    fdir = tmp_path / "fixtures"
+    fdir.mkdir()
+    src = _write_ref_fixture(fdir, "invoice_basic", "hello")
+    src.write_text("hellp", encoding="utf-8")
+    fixture = FixtureStore(fdir).load("invoice_basic")
+    with pytest.raises(FixtureError, match="source drifted") as excinfo:
+        fixture.check_source_digest()
+    assert "invoice_basic" in str(excinfo.value)
+
+
+def test_source_ref_without_digest_fails_when_required(tmp_path: Path) -> None:
+    fdir = tmp_path / "fixtures"
+    fdir.mkdir()
+    _write_ref_fixture(fdir, "legacy", "hello", digest=None)
+    fixture = FixtureStore(fdir).load("legacy")
+    with pytest.raises(FixtureError, match="no source_sha256"):
+        fixture.check_source_digest(require_digest=True)
+    fixture.check_source_digest(require_digest=False)
+
+
+def test_inline_source_skips_digest(fixtures_dir: Path) -> None:
+    fixture = Fixture(name="inline", source_inline="raw", expected={})
+    fixture.check_source_digest(require_digest=True)
+    assert fixture.source_sha256 is None
 
 
 def test_source_ref_cannot_escape_via_symlink(tmp_path: Path) -> None:

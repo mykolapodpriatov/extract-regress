@@ -77,6 +77,7 @@ class Runner:
         other fixture on disk is left alone.
         """
         fixtures = self._select(self.store.load_all(), names)
+        self._assert_sources_unmoved(fixtures)
         results: list[FixtureResult] = []
         usages: list[Usage] = []
         current_extractions: list[dict[str, Any]] = []
@@ -150,7 +151,10 @@ class Runner:
                 continue
 
             if overwrite or not fixture.has_golden():
-                updated = fixture.model_copy(update={"expected": extraction.value})
+                updates: dict[str, Any] = {"expected": extraction.value}
+                if fixture.source_ref is not None:
+                    updates["source_sha256"] = fixture.hash_source()
+                updated = fixture.model_copy(update=updates)
                 self.store.save(updated)
                 written.append(fixture.name)
                 sampled.append(extraction.value)
@@ -194,6 +198,22 @@ class Runner:
             for fixture in fixtures
             if any(fnmatch.fnmatchcase(fixture.name, pattern) for pattern in names)
         ]
+
+    def _assert_sources_unmoved(self, fixtures: list[Fixture]) -> None:
+        """Fail the run if any pinned ``source_ref`` file has drifted.
+
+        Checked before extraction so a source-format change is reported as
+        ``source drifted`` rather than a field-level model regression.
+        Fixtures with no digest are left alone (validate flags those).
+        """
+        drifted: list[str] = []
+        for fixture in fixtures:
+            try:
+                fixture.check_source_digest(require_digest=False)
+            except FixtureError as exc:
+                drifted.append(str(exc))
+        if drifted:
+            raise FixtureError("; ".join(drifted))
 
     def _coverage_deltas(self, extractions: list[dict[str, Any]]) -> list[Any]:
         baseline = coverage_mod.load_baseline(self.config.fixtures_dir)

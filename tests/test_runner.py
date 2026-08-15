@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -347,6 +349,87 @@ def test_run_names_mixes_exact_and_glob(fixtures_dir: Path) -> None:
 
     assert {r.fixture_name for r in report.results} == {"invoice_a", "doc_x", "doc_y"}
     assert sorted(extractor.calls) == ["doc-a", "doc-x", "doc-y"]
+
+
+# ---------------------------------------------------------------------------
+# source_sha256 pin (#14)
+# ---------------------------------------------------------------------------
+
+
+def _seed_ref(
+    fixtures_dir: Path,
+    name: str,
+    text: str,
+    expected: dict,
+    *,
+    digest: str | None = "",
+) -> Path:
+    samples = fixtures_dir / "samples"
+    samples.mkdir(exist_ok=True)
+    src = samples / f"{name}.txt"
+    src.write_text(text, encoding="utf-8")
+    payload: dict[str, object] = {
+        "version": 1,
+        "name": name,
+        "source_ref": f"samples/{name}.txt",
+        "expected": expected,
+    }
+    if digest is None:
+        pass
+    elif digest == "":
+        payload["source_sha256"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    else:
+        payload["source_sha256"] = digest
+    (fixtures_dir / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+    return src
+
+
+def test_run_unchanged_source_ref_passes(fixtures_dir: Path) -> None:
+    _seed_ref(fixtures_dir, "invoice_basic", "doc", {"total": 1})
+    extractor = FakeExtractor({"doc": {"total": 1}})
+    config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
+    report = Runner(config).run()
+    assert report.passed
+    assert extractor.calls == ["doc"]
+
+
+def test_run_one_byte_source_edit_raises_before_extract(fixtures_dir: Path) -> None:
+    src = _seed_ref(fixtures_dir, "invoice_basic", "doc", {"total": 1})
+    src.write_bytes(src.read_bytes() + b"x")
+    extractor = FakeExtractor({"doc": {"total": 1}, "docx": {"total": 1}})
+    config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
+    with pytest.raises(FixtureError, match="source drifted") as excinfo:
+        Runner(config).run()
+    assert "invoice_basic" in str(excinfo.value)
+    # Drift is not treated as an extraction regression: the extractor is never called.
+    assert extractor.calls == []
+
+
+def test_record_writes_source_sha256(fixtures_dir: Path) -> None:
+    samples = fixtures_dir / "samples"
+    samples.mkdir()
+    (samples / "doc.txt").write_text("hello", encoding="utf-8")
+    payload = {"version": 1, "name": "ref", "source_ref": "samples/doc.txt"}
+    (fixtures_dir / "ref.json").write_text(json.dumps(payload), encoding="utf-8")
+    extractor = FakeExtractor({"hello": {"total": 7}})
+    config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
+
+    written = Runner(config).record()
+
+    assert written == ["ref"]
+    loaded = FixtureStore(fixtures_dir).load("ref")
+    assert loaded.source_sha256 == hashlib.sha256(b"hello").hexdigest()
+    raw = json.loads((fixtures_dir / "ref.json").read_text(encoding="utf-8"))
+    assert raw["source_sha256"] == loaded.source_sha256
+
+
+def test_record_inline_skips_source_sha256(fixtures_dir: Path) -> None:
+    _seed_unrecorded(fixtures_dir, "inline", "doc")
+    extractor = FakeExtractor({"doc": {"total": 1}})
+    config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
+    Runner(config).record()
+    raw = json.loads((fixtures_dir / "inline.json").read_text(encoding="utf-8"))
+    assert "source_sha256" not in raw
 
 
 # ---------------------------------------------------------------------------
