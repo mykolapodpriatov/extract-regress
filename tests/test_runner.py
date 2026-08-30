@@ -309,9 +309,7 @@ def test_run_names_glob_matches_multiple_fixtures(fixtures_dir: Path) -> None:
     _seed(fixtures_dir, "invoice_a", "doc-a", {"total": 1})
     _seed(fixtures_dir, "invoice_b", "doc-b", {"total": 2})
     _seed(fixtures_dir, "receipt_a", "doc-c", {"total": 3})
-    extractor = FakeExtractor(
-        {"doc-a": {"total": 1}, "doc-b": {"total": 2}, "doc-c": {"total": 3}}
-    )
+    extractor = FakeExtractor({"doc-a": {"total": 1}, "doc-b": {"total": 2}, "doc-c": {"total": 3}})
     config = ERConfig(extract_fn=extractor, fixtures_dir=str(fixtures_dir))
 
     report = Runner(config).run(names=["invoice_*"])
