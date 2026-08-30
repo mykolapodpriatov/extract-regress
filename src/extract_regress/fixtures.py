@@ -141,8 +141,7 @@ class Fixture(BaseModel):
         digest = self.hash_source()
         if digest != self.source_sha256:
             raise FixtureError(
-                f"source drifted: {self.name} "
-                f"(pinned {self.source_sha256}, now {digest})"
+                f"source drifted: {self.name} (pinned {self.source_sha256}, now {digest})"
             )
 
     def has_golden(self) -> bool:

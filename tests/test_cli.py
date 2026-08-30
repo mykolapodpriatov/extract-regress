@@ -517,9 +517,7 @@ def test_run_one_byte_edit_fails_with_fixture_name(tmp_path: Path) -> None:
 def test_record_writes_source_sha256(tmp_path: Path) -> None:
     project = _setup_project(tmp_path, CONFTEST, with_goldens=False)
     _add_source_ref_fixture(project, "invoice_basic", "doc-a", digest=None)
-    rec = runner.invoke(
-        app, ["record", "--project-dir", str(project), "-k", "invoice_basic"]
-    )
+    rec = runner.invoke(app, ["record", "--project-dir", str(project), "-k", "invoice_basic"])
     assert rec.exit_code == 0, rec.output
     raw = json.loads((project / "fixtures" / "invoice_basic.json").read_text())
     assert raw["source_sha256"] == hashlib.sha256(b"doc-a").hexdigest()
