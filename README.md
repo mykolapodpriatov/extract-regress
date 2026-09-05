@@ -132,7 +132,46 @@ abs_tol = 0.01
 [tool.extract_regress.budget]
 max_cost_usd_per_run = 0.50
 max_p95_latency_ms = 2000
+
+[[tool.extract_regress.quarantine]]
+name = "invoice_lumen_2024"
+reason = "vendor switched to a two-column layout; new prompt in #41"
+until = "2026-10-01"
 ```
+
+### Quarantine
+
+`run` exits non-zero on any regression, which leaves nowhere to put a fixture
+you already know is broken and are not fixing today. The alternatives are all
+bad: left failing, the build is red and within a week nobody reads it; deleted,
+the fixture and its coverage row go with it; filtered out with `-k`, the
+exclusion lives in whatever CI YAML someone edited.
+
+A quarantined fixture still runs, still diffs, and still shows up in the report
+marked as quarantined with its reason. Its failure does not fail the build.
+
+Three rules give it teeth, and they are the reason this is a feature rather
+than a `-k` flag in a workflow file:
+
+- **A quarantined fixture that passes fails the build.** A stale entry silently
+  swallows the regression when it comes back, which is worse than no quarantine
+  at all. Passing means the reason no longer applies, so the entry has to go.
+- **`until` is required and enforced.** Past that date the build fails with the
+  reason and the date. Quarantine is a decision to defer, and a deferral with no
+  end is a deletion nobody wrote down.
+- **`reason` is required.** An entry with no reason is a mystery to whoever
+  finds it in six months.
+
+`name` is an exact fixture name, not a glob: a pattern would quietly cover
+fixtures added later. Expiry is judged against the run date, resolved when the
+run happens, so a saved report renders the same tomorrow.
+
+Every output carries it. Terminal, Markdown and JSON get a quarantine section
+separate from passes and failures, JUnit marks quarantined fixtures `skipped`
+with the reason as the message, and the JSON adds a `blocking` flag per fixture
+so a consumer can tell "failed" from "failed and it counts". Coverage drift is
+untouched: a quarantined fixture is still a source format the suite covers, and
+dropping it from coverage would mask a second problem behind the first.
 
 ## Runnable example
 

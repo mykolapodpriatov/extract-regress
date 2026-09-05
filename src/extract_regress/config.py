@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .budget import BudgetConfig
 from .coverage import DEFAULT_DROP_THRESHOLD
+from .quarantine import QuarantineConfig, QuarantineRule
 from .tolerances import ToleranceConfig, ToleranceRule
 from .types import ExtractFn, JudgeFn
 
@@ -33,6 +34,7 @@ class ProjectConfig(BaseModel):
     coverage_drop_threshold: float = DEFAULT_DROP_THRESHOLD
     tolerances: ToleranceConfig = Field(default_factory=ToleranceConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
+    quarantine: QuarantineConfig = Field(default_factory=QuarantineConfig)
     judge_version: int = 1
 
     @classmethod
@@ -41,10 +43,14 @@ class ProjectConfig(BaseModel):
         payload = dict(data)
         rules = payload.pop("tolerances", []) or []
         budget = payload.pop("budget", {}) or {}
+        quarantine = payload.pop("quarantine", []) or []
         tol_config = ToleranceConfig(rules=tuple(ToleranceRule(**rule) for rule in rules))
         return cls(
             tolerances=tol_config,
             budget=BudgetConfig(**budget),
+            quarantine=QuarantineConfig(
+                rules=tuple(QuarantineRule(**entry) for entry in quarantine)
+            ),
             **payload,
         )
 
@@ -91,6 +97,7 @@ class ERConfig:
     tolerances: ToleranceConfig = field(default_factory=ToleranceConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     coverage_drop_threshold: float = DEFAULT_DROP_THRESHOLD
+    quarantine: QuarantineConfig = field(default_factory=QuarantineConfig)
     judge_fn: JudgeFn | None = None
     judge_version: int = 1
 
@@ -109,6 +116,7 @@ class ERConfig:
             tolerances=project.tolerances,
             budget=project.budget,
             coverage_drop_threshold=project.coverage_drop_threshold,
+            quarantine=project.quarantine,
             judge_fn=judge_fn,
             judge_version=project.judge_version,
         )

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import fnmatch
 from collections.abc import Mapping, Sequence
+from datetime import date
 from enum import StrEnum
 from typing import Any
 
@@ -69,13 +70,25 @@ class Runner:
 
     # -- public API --------------------------------------------------------
 
-    def run(self, *, check_budget: bool = True, names: Sequence[str] | None = None) -> RunReport:
+    def run(
+        self,
+        *,
+        check_budget: bool = True,
+        names: Sequence[str] | None = None,
+        today: date | None = None,
+    ) -> RunReport:
         """Replay every fixture and produce a :class:`RunReport` (read-only).
 
         ``names``, if given, limits the replay to fixtures whose names match
         any of the given ``fnmatch`` patterns (see :meth:`_select`); every
         other fixture on disk is left alone.
+
+        ``today`` is the date quarantine expiry is judged against. It is a
+        parameter so a test can pin it; production callers omit it and get the
+        system date. Expiry is resolved here rather than in the report, so the
+        report stays a pure value that renders the same tomorrow.
         """
+        now = today or date.today()
         fixtures = self._select(self.store.load_all(), names)
         self._assert_sources_unmoved(fixtures)
         results: list[FixtureResult] = []
@@ -90,7 +103,11 @@ class Runner:
                 # An errored extraction yields ``{}``; counting it in the
                 # coverage sample would skew every field toward 0 and raise
                 # spurious coverage-drop alerts, so it is excluded.
-                results.append(FixtureResult(fixture_name=fixture.name, error=extraction.error))
+                results.append(
+                    self._with_quarantine(
+                        FixtureResult(fixture_name=fixture.name, error=extraction.error), now
+                    )
+                )
                 continue
 
             current_extractions.append(extraction.value)
@@ -101,7 +118,11 @@ class Runner:
                 self.config.tolerances,
                 judge_fn=self.config.judge_fn,
             )
-            results.append(FixtureResult(fixture_name=fixture.name, diffs=tuple(diffs)))
+            results.append(
+                self._with_quarantine(
+                    FixtureResult(fixture_name=fixture.name, diffs=tuple(diffs)), now
+                )
+            )
 
         coverage_deltas = self._coverage_deltas(current_extractions)
         budget = self._budget(usages) if check_budget else BudgetOutcome(checked=False)
@@ -110,6 +131,15 @@ class Runner:
             results=tuple(results),
             coverage_deltas=tuple(coverage_deltas),
             budget=budget,
+        )
+
+    def _with_quarantine(self, result: FixtureResult, today: date) -> FixtureResult:
+        """Attach the quarantine entry covering this fixture, if any."""
+        rule = self.config.quarantine.rule_for(result.fixture_name)
+        if rule is None:
+            return result
+        return result.model_copy(
+            update={"quarantine": rule, "quarantine_expired": rule.expired(today)}
         )
 
     def record(self, *, overwrite: bool = False, names: Sequence[str] | None = None) -> list[str]:
