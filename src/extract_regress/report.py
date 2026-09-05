@@ -40,6 +40,15 @@ def summary_line(report: RunReport) -> str:
         f"{failing} failing diff(s)",
         f"{dropped} coverage drop(s)",
     ]
+    # Quarantined counts go on the summary line rather than only in a section
+    # below: the number of failures being absorbed is the thing that decays
+    # quietly if nobody sees it.
+    if report.quarantined_results:
+        parts.append(f"{len(report.quarantined_results)} quarantined")
+    if report.expired_quarantines:
+        parts.append(f"{len(report.expired_quarantines)} expired quarantine(s)")
+    if report.stale_quarantines:
+        parts.append(f"{len(report.stale_quarantines)} stale quarantine(s)")
     if report.budget.checked:
         parts.append("budget " + ("ok" if report.budget.passed else "exceeded"))
     return " | ".join(parts)
@@ -81,6 +90,23 @@ def render_terminal(report: RunReport, *, color: bool = True) -> str:
         console.print(table)
     else:
         console.print("[green]No field diffs.[/]")
+
+    for result in report.quarantined_results:
+        rule = result.quarantine
+        assert rule is not None  # quarantined_results only yields covered rows
+        console.print(
+            f"[yellow]quarantined[/] {result.fixture_name} until {rule.until}: {rule.reason}"
+        )
+    for result in report.expired_quarantines:
+        rule = result.quarantine
+        assert rule is not None
+        console.print(
+            f"[red]quarantine expired[/] {result.fixture_name} on {rule.until}: {rule.reason}"
+        )
+    for result in report.stale_quarantines:
+        console.print(
+            f"[red]stale quarantine[/] {result.fixture_name} now passes; remove its entry"
+        )
 
     for delta in report.dropped_coverage:
         console.print(
@@ -134,6 +160,27 @@ def render_markdown(report: RunReport) -> str:
             )
         lines.append("")
 
+    if report.quarantined_results or report.expired_quarantines or report.stale_quarantines:
+        lines.append("### Quarantine")
+        lines.append("")
+        lines.append("| Fixture | Until | State | Reason |")
+        lines.append("| --- | --- | --- | --- |")
+        for result in report.quarantined_results:
+            rule = result.quarantine
+            assert rule is not None
+            lines.append(f"| {result.fixture_name} | {rule.until} | deferred | {rule.reason} |")
+        for result in report.expired_quarantines:
+            rule = result.quarantine
+            assert rule is not None
+            lines.append(f"| {result.fixture_name} | {rule.until} | **EXPIRED** | {rule.reason} |")
+        for result in report.stale_quarantines:
+            rule = result.quarantine
+            assert rule is not None
+            lines.append(
+                f"| {result.fixture_name} | {rule.until} | **STALE, now passes** | {rule.reason} |"
+            )
+        lines.append("")
+
     if report.dropped_coverage:
         lines.append("### Coverage drops")
         lines.append("")
@@ -184,6 +231,9 @@ def render_json(report: RunReport) -> str:
             "fixtures": len(report.results),
             "failing_diffs": sum(len(r.failing_diffs) for r in report.results),
             "coverage_drops": len(report.dropped_coverage),
+            "quarantined": len(report.quarantined_results),
+            "expired_quarantines": len(report.expired_quarantines),
+            "stale_quarantines": len(report.stale_quarantines),
             "budget_checked": report.budget.checked,
             "budget_passed": report.budget.passed,
         },
@@ -192,6 +242,17 @@ def render_json(report: RunReport) -> str:
                 "fixture": result.fixture_name,
                 "error": result.error,
                 "passed": result.passed,
+                "blocking": result.blocking,
+                "quarantine": (
+                    None
+                    if result.quarantine is None
+                    else {
+                        "reason": result.quarantine.reason,
+                        "until": result.quarantine.until.isoformat(),
+                        "expired": result.quarantine_expired,
+                        "stale": result.stale_quarantine,
+                    }
+                ),
                 "diffs": [_diff_payload(d) for d in result.diffs],
             }
             for result in report.results
@@ -253,9 +314,32 @@ def render_junit(report: RunReport) -> str:
     )
     for result in report.results:
         case = ET.SubElement(suite, "testcase", classname="fixture", name=result.fixture_name)
-        if not result.passed:
+        if result.quarantined and not result.passed:
+            # Skipped, not failed: a CI test UI already knows how to render a
+            # skip with a reason, and the run is not red because of this one.
+            rule = result.quarantine
+            assert rule is not None
+            message = f"quarantined until {rule.until}: {rule.reason}"
+            skipped = ET.SubElement(case, "skipped", message=message)
+            skipped.text = message
+            continue
+        if result.blocking:
             failures += 1
-            message = _junit_failure_message(result)
+            if result.stale_quarantine:
+                rule = result.quarantine
+                assert rule is not None
+                message = (
+                    f"quarantine for {result.fixture_name} is stale: the fixture passes, "
+                    f"so remove the entry (reason was: {rule.reason})"
+                )
+            elif result.quarantine is not None and result.quarantine_expired:
+                rule = result.quarantine
+                assert rule is not None
+                message = (
+                    f"quarantine for {result.fixture_name} expired on {rule.until}: {rule.reason}"
+                )
+            else:
+                message = _junit_failure_message(result)
             failure = ET.SubElement(case, "failure", type="regression", message=message)
             failure.text = message
     if report.budget.failing:

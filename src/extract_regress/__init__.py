@@ -24,6 +24,7 @@ from .diff import diff_extraction
 from .fixtures import Fixture, FixtureStore, schema_hash
 from .judge import CachedJudge, JudgeCache, make_judge
 from .pytest_plugin import case
+from .quarantine import QuarantineConfig, QuarantineRule
 from .runner import Mode, Runner
 from .tolerances import ToleranceConfig, ToleranceRule
 from .types import (
@@ -56,6 +57,8 @@ __all__ = [  # noqa: RUF022 - grouped by concern for readability, not sorted
     "schema_hash",
     # diff
     "diff_extraction",
+    "QuarantineConfig",
+    "QuarantineRule",
     "ToleranceConfig",
     "ToleranceRule",
     # coverage

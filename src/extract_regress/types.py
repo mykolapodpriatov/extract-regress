@@ -14,6 +14,8 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .quarantine import QuarantineRule
+
 # A source can be raw text, raw bytes, or a path to a file on disk.
 ExtractInput = str | bytes | Path
 
@@ -143,6 +145,12 @@ class FixtureResult(BaseModel):
     fixture_name: str
     diffs: tuple[FieldDiff, ...] = ()
     error: str | None = None
+    #: The quarantine entry covering this fixture, if any. A quarantined
+    #: fixture still runs and still diffs; it just does not fail the build.
+    quarantine: QuarantineRule | None = None
+    #: Whether that entry had run out when the run happened. Resolved by the
+    #: runner against the run date, so the report stays a pure value.
+    quarantine_expired: bool = False
 
     @property
     def failing_diffs(self) -> tuple[FieldDiff, ...]:
@@ -151,8 +159,40 @@ class FixtureResult(BaseModel):
 
     @property
     def passed(self) -> bool:
-        """A fixture passes iff it had no error and no failing diffs."""
+        """A fixture passes iff it had no error and no failing diffs.
+
+        Unchanged by quarantine: this says what the fixture did, not what the
+        build should do about it.
+        """
         return self.error is None and not self.failing_diffs
+
+    @property
+    def quarantined(self) -> bool:
+        """Whether a live quarantine entry covers this fixture."""
+        return self.quarantine is not None and not self.quarantine_expired
+
+    @property
+    def stale_quarantine(self) -> bool:
+        """A quarantined fixture that passed, so the entry should be removed.
+
+        This fails the build. A stale entry silently swallows the regression
+        when it comes back, which is worse than having no quarantine at all.
+        """
+        return self.quarantine is not None and self.passed
+
+    @property
+    def blocking(self) -> bool:
+        """Whether this result should fail the build.
+
+        A failing fixture blocks unless a live quarantine covers it. A passing
+        one blocks only when it is still quarantined, and an expired entry
+        blocks whatever the fixture did.
+        """
+        if self.quarantine is None:
+            return not self.passed
+        if self.quarantine_expired:
+            return True
+        return self.stale_quarantine
 
 
 class RunReport(BaseModel):
@@ -171,8 +211,32 @@ class RunReport(BaseModel):
 
     @property
     def failing_results(self) -> list[FixtureResult]:
-        """Fixtures that failed (error or non-tolerated diff)."""
+        """Fixtures that failed (error or non-tolerated diff).
+
+        Includes quarantined ones: this reports what happened, and
+        :attr:`blocking_results` reports what it costs.
+        """
         return [r for r in self.results if not r.passed]
+
+    @property
+    def quarantined_results(self) -> list[FixtureResult]:
+        """Failing fixtures a live quarantine entry is absorbing."""
+        return [r for r in self.results if r.quarantined and not r.passed]
+
+    @property
+    def stale_quarantines(self) -> list[FixtureResult]:
+        """Quarantined fixtures that passed, so their entries should go."""
+        return [r for r in self.results if r.stale_quarantine]
+
+    @property
+    def expired_quarantines(self) -> list[FixtureResult]:
+        """Fixtures whose quarantine entry has run out."""
+        return [r for r in self.results if r.quarantine is not None and r.quarantine_expired]
+
+    @property
+    def blocking_results(self) -> list[FixtureResult]:
+        """Results that should fail the build."""
+        return [r for r in self.results if r.blocking]
 
     @property
     def dropped_coverage(self) -> list[CoverageDelta]:
@@ -183,7 +247,9 @@ class RunReport(BaseModel):
     def passed(self) -> bool:
         """Overall pass/fail for the run.
 
-        Fails if any fixture failed, any coverage fill-rate dropped beyond
-        threshold, or the budget check failed.
+        Fails if any fixture blocks, any coverage fill-rate dropped beyond
+        threshold, or the budget check failed. A failure a live quarantine
+        entry covers does not block; a quarantine that has expired, or that
+        covers a fixture which now passes, does.
         """
-        return not self.failing_results and not self.dropped_coverage and not self.budget.failing
+        return not self.blocking_results and not self.dropped_coverage and not self.budget.failing
