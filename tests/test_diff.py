@@ -64,6 +64,16 @@ def test_bool_vs_int_is_a_type_change_not_numeric() -> None:
     assert d.failing
 
 
+def test_nan_matches_nan_and_not_a_real_number() -> None:
+    # float('nan') != float('nan'), so a stable "not a number" used to fail
+    # the golden on every run. A NaN against a real amount is still a failure.
+    same = diff_extraction({"total": float("nan")}, {"total": float("nan")}, ToleranceConfig())
+    assert _only(same, "total").tolerated
+
+    different = diff_extraction({"total": float("nan")}, {"total": 1.0}, ToleranceConfig())
+    assert _only(different, "total").failing
+
+
 def test_int_vs_bool_is_a_type_change() -> None:
     cfg = ToleranceConfig(rules=(ToleranceRule(path="flag", abs_tol=10.0),))
     diffs = diff_extraction({"flag": 0}, {"flag": False}, cfg)

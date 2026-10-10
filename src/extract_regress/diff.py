@@ -82,10 +82,21 @@ def concrete_path(components: Sequence[str | int]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _both_nan(a: Any, b: Any) -> bool:
+    """True when both sides are NaN.
+
+    ``NaN == NaN`` is false in Python, and :func:`math.isclose` agrees, so a
+    golden and an actual that both extracted "not a number" would otherwise
+    flap as a regression on every run. Two NaNs are the same extracted value.
+    A NaN against a real number is still a mismatch.
+    """
+    return isinstance(a, float) and isinstance(b, float) and math.isnan(a) and math.isnan(b)
+
+
 def _numbers_match(a: Any, b: Any, rule: ToleranceRule) -> bool:
     if not (_is_number(a) and _is_number(b)):
         return False
-    if a == b:
+    if _both_nan(a, b) or a == b:
         return True
     abs_tol = rule.abs_tol if rule.abs_tol is not None else 0.0
     rel_tol = rule.rel_tol if rule.rel_tol is not None else 0.0
@@ -328,6 +339,19 @@ def _resolve_diff(
         )
 
     # kind == "changed"
+    # NaN does not compare equal to itself, so this has to happen before the
+    # "no rule means strict equality" fall-through. It is equality, not a
+    # tolerance: no rule is required.
+    if _both_nan(t1, t2):
+        return FieldDiff(
+            path=cpath,
+            kind="changed",
+            golden=t1,
+            actual=t2,
+            tolerated=True,
+            reason="both values are NaN",
+        )
+
     if rule is not None:
         tolerated, reason = _scalar_tolerated(t1, t2, rule)
         if tolerated:
