@@ -182,6 +182,16 @@ def test_date_day_granularity_normalizes_naive_to_utc() -> None:
     assert _only(diffs, "d").tolerated
 
 
+def test_partial_month_does_not_borrow_todays_day() -> None:
+    # "2024-03" has no day. It must not compare equal to whichever day
+    # the process happens to be running on. The missing day is day 1.
+    cfg = ToleranceConfig(rules=(ToleranceRule(path="d", as_date=True, date_granularity="day"),))
+    first = diff_extraction({"d": "2024-03"}, {"d": "2024-03-01"}, cfg)
+    assert _only(first, "d").tolerated
+    later = diff_extraction({"d": "2024-03"}, {"d": "2024-03-11"}, cfg)
+    assert _only(later, "d").failing
+
+
 def test_as_date_on_non_date_value_hard_fails_as_type_change() -> None:
     # ``as_date`` set, but the values are not date-like → no re-routing; the
     # underlying type change still hard-fails.

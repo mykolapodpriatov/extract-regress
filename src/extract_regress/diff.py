@@ -112,7 +112,11 @@ def _to_datetime(value: Any) -> datetime | None:
         return datetime(value.year, value.month, value.day)
     if isinstance(value, str):
         try:
-            return date_parser.parse(value)
+            # Missing fields must not come from today. dateutil's default is
+            # midnight of the current day, so "2024-03" compared equal to
+            # "2024-03-11" on the 11th and to a different day the next morning.
+            # Unspecified parts stay at 1 January year 1, midnight.
+            return date_parser.parse(value, default=datetime(1, 1, 1))
         except (ValueError, OverflowError):
             return None
     return None
